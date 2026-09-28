@@ -70,7 +70,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 
 	reader := bufio.NewReader(stdin)
 	for {
-		program := tea.NewProgram(model, tea.WithInput(reader), tea.WithOutput(stdout))
+		// Pass the original reader so Bubble Tea can detect the terminal and
+		// enable raw mode. The buffered reader is reserved for the post-TUI
+		// unsaved-changes prompt.
+		program := tea.NewProgram(model, tea.WithInput(stdin), tea.WithOutput(stdout))
 		_, err := program.Run()
 		if err != nil && !errors.Is(err, tea.ErrInterrupted) {
 			return fmt.Errorf("run editor: %w", err)
