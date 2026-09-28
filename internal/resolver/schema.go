@@ -133,6 +133,9 @@ func cloneSchemaNode(node schema.Node, active map[uintptr]bool) (schema.Node, er
 		}
 		cloned.Object.Validators = append([]schema.ObjectValidator(nil), node.Object.Validators...)
 	case schema.ArrayKind:
+		if node.Array.Item == nil {
+			return schema.Node{}, schema.ErrInvalidSchema
+		}
 		if node.Array.MinItems != nil && *node.Array.MinItems < 0 {
 			return schema.Node{}, schema.ErrInvalidSchema
 		}
@@ -142,11 +145,17 @@ func cloneSchemaNode(node schema.Node, active map[uintptr]bool) (schema.Node, er
 		if node.Array.MinItems != nil && node.Array.MaxItems != nil && *node.Array.MinItems > *node.Array.MaxItems {
 			return schema.Node{}, schema.ErrInvalidSchema
 		}
-		item, err := cloneSchemaNode(node.Array.Item, active)
+		identity := reflect.ValueOf(node.Array.Item).Pointer()
+		if identity == 0 || active[identity] {
+			return schema.Node{}, schema.ErrInvalidSchema
+		}
+		active[identity] = true
+		item, err := cloneSchemaNode(*node.Array.Item, active)
+		delete(active, identity)
 		if err != nil {
 			return schema.Node{}, schema.ErrInvalidSchema
 		}
-		cloned.Array.Item = item
+		cloned.Array.Item = &item
 		cloned.Array.MinItems = cloneIntPointer(node.Array.MinItems)
 		cloned.Array.MaxItems = cloneIntPointer(node.Array.MaxItems)
 	}
@@ -162,7 +171,7 @@ func schemaObjectHasData(value schema.ObjectSchema) bool {
 }
 
 func schemaArrayHasData(value schema.ArraySchema) bool {
-	return value.MinItems != nil || value.MaxItems != nil || schemaNodeHasData(value.Item)
+	return value.MinItems != nil || value.MaxItems != nil || (value.Item != nil && schemaNodeHasData(*value.Item))
 }
 
 func schemaNodeHasData(value schema.Node) bool {
@@ -275,7 +284,7 @@ func validateSchemaNode(doc *document.Document, expected schema.Node, id documen
 			addIssue(issues, id, path, "schema.max_items", fmt.Sprintf("must contain at most %d items", *expected.Array.MaxItems), schema.SeverityError)
 		}
 		for _, itemID := range items {
-			validateSchemaNode(doc, expected.Array.Item, itemID, issues)
+			validateSchemaNode(doc, *expected.Array.Item, itemID, issues)
 		}
 	}
 }

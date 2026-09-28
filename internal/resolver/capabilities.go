@@ -169,14 +169,14 @@ func schemaNodeAt(doc *document.Document, id document.NodeID, compiled CompiledS
 	for _, segment := range path.Segments() {
 		switch typed := segment.(type) {
 		case document.SequenceIndexSegment:
-			if currentSchema.Kind != schema.ArrayKind {
+			if currentSchema.Kind != schema.ArrayKind || currentSchema.Array.Item == nil {
 				return nil
 			}
 			items, ok := doc.SequenceItems(currentID)
 			if !ok || typed.Index() < 0 || typed.Index() >= len(items) {
 				return nil
 			}
-			currentSchema = &currentSchema.Array.Item
+			currentSchema = currentSchema.Array.Item
 			currentID = items[typed.Index()]
 		case document.MappingEntrySegment:
 			if typed.Role() != document.MappingValueRole || currentSchema.Kind != schema.ObjectKind {
@@ -217,7 +217,7 @@ func SequenceItemSchema(doc *document.Document, id document.NodeID, compiled Com
 	if !ok || shape == nil || node.Kind() != document.NodeSequence || shape.Kind != schema.ArrayKind {
 		return schema.Node{}, false
 	}
-	return shape.Array.Item, true
+	return *shape.Array.Item, true
 }
 
 // ObjectFieldsAt returns the declared field schemas for a documented mapping.
@@ -311,7 +311,7 @@ func deletionSafe(doc *document.Document, roots []document.NodeID) bool {
 			return true
 		}
 		visited[id] = struct{}{}
-		node, ok := doc.Node(id)
+		_, ok := doc.Node(id)
 		if !ok {
 			return true
 		}

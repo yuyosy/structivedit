@@ -13,12 +13,12 @@ import (
 )
 
 type addCandidate struct {
-	kind          schema.Kind
-	scalar        any
-	hasScalar     bool
-	inputID       InputID
-	objectFields  []candidateField
-	arrayItems    []*addCandidate
+	kind         schema.Kind
+	scalar       any
+	hasScalar    bool
+	inputID      InputID
+	objectFields []candidateField
+	arrayItems   []*addCandidate
 }
 
 type candidateField struct {
@@ -245,7 +245,7 @@ func (builder *candidateBuilder) build(node schema.Node, fieldPath string, field
 		}
 		for index := 0; index < count; index++ {
 			path := fieldPath + "[" + strconv.Itoa(index) + "]"
-			candidate.arrayItems = append(candidate.arrayItems, builder.build(node.Array.Item, path, false, nil))
+			candidate.arrayItems = append(candidate.arrayItems, builder.build(*node.Array.Item, path, false, nil))
 		}
 	}
 	return candidate

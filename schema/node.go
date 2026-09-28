@@ -42,7 +42,8 @@ type Field struct {
 
 // ArraySchema describes the item shape and permitted array length.
 type ArraySchema struct {
-	Item     Node
+	// Item is a pointer to keep the recursive Go type finite in size.
+	Item     *Node
 	MinItems *int
 	MaxItems *int
 }
