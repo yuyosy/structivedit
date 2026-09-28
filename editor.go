@@ -106,6 +106,27 @@ func (e *Editor) Apply(action Action) (ApplyResult, error) {
 		return e.applyUndo()
 	case Redo, *Redo:
 		return e.applyRedo()
+	case Add:
+		return e.CommitAdd(typed.Plan, typed.Values)
+	case *Add:
+		if typed == nil {
+			return ApplyResult{}, ErrInvalidInput
+		}
+		return e.CommitAdd(typed.Plan, typed.Values)
+	case Delete:
+		return e.applyDelete(typed.NodeID)
+	case *Delete:
+		if typed == nil {
+			return ApplyResult{}, ErrInvalidInput
+		}
+		return e.applyDelete(typed.NodeID)
+	case Move:
+		return e.applyMove(typed.NodeID, typed.ToIndex)
+	case *Move:
+		if typed == nil {
+			return ApplyResult{}, ErrInvalidInput
+		}
+		return e.applyMove(typed.NodeID, typed.ToIndex)
 	default:
 		return ApplyResult{}, ErrInvalidInput
 	}

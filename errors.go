@@ -25,4 +25,16 @@ var (
 	ErrNoUndo = errors.New("structivedit: no operation to undo")
 	// ErrNoRedo reports that no retained Document operation can be redone.
 	ErrNoRedo = errors.New("structivedit: no operation to redo")
+	// ErrNotAddable reports that no requested schema-defined structure can be added.
+	ErrNotAddable = errors.New("structivedit: target is not addable")
+	// ErrNotDeletable reports that a node cannot be deleted under its schema or constraints.
+	ErrNotDeletable = errors.New("structivedit: node is not deletable")
+	// ErrNotReorderable reports that a node cannot move within its parent sequence.
+	ErrNotReorderable = errors.New("structivedit: node is not reorderable")
+	// ErrSchemaRequired reports that an operation requires a configured schema.
+	ErrSchemaRequired = errors.New("structivedit: schema required")
+	// ErrStaleAddPlan reports a foreign, modified, or outdated AddPlan.
+	ErrStaleAddPlan = errors.New("structivedit: stale add plan")
+	// ErrMissingInput reports an AddPlan scalar input that was not supplied.
+	ErrMissingInput = errors.New("structivedit: missing required input")
 )

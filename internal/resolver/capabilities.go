@@ -96,6 +96,7 @@ func canDelete(doc *document.Document, id document.NodeID, compiled CompiledSche
 		return false
 	}
 	eligible := false
+	deletionRoots := []document.NodeID{id}
 	switch parent.Role {
 	case document.ParentSequenceItem:
 		containerShape := schemaNodeAt(doc, parent.Parent, compiled)
@@ -116,6 +117,11 @@ func canDelete(doc *document.Document, id document.NodeID, compiled CompiledSche
 		if !exists {
 			return false
 		}
+		entries, ok := doc.MappingEntries(parent.Parent)
+		if !ok || parent.Index < 0 || parent.Index >= len(entries) || entries[parent.Index].Value != id {
+			return false
+		}
+		deletionRoots = append(deletionRoots, entries[parent.Index].Key)
 		eligible = !field.Required
 	default:
 		return false
@@ -123,7 +129,7 @@ func canDelete(doc *document.Document, id document.NodeID, compiled CompiledSche
 	if !eligible || !applySchemaDecision(shape.Capabilities.Delete, true) {
 		return false
 	}
-	return deletionSafe(doc, id)
+	return deletionSafe(doc, deletionRoots)
 }
 
 func canReorder(doc *document.Document, id document.NodeID, compiled CompiledSchema, permitted bool) bool {
@@ -201,6 +207,43 @@ func schemaNodeAt(doc *document.Document, id document.NodeID, compiled CompiledS
 	return currentSchema
 }
 
+// HasSchema reports whether compiled contains a root Schema node.
+func HasSchema(compiled CompiledSchema) bool { return compiled.root != nil }
+
+// SequenceItemSchema returns the item schema for a documented sequence.
+func SequenceItemSchema(doc *document.Document, id document.NodeID, compiled CompiledSchema) (schema.Node, bool) {
+	node, ok := doc.Node(id)
+	shape := schemaNodeAt(doc, id, compiled)
+	if !ok || shape == nil || node.Kind() != document.NodeSequence || shape.Kind != schema.ArrayKind {
+		return schema.Node{}, false
+	}
+	return shape.Array.Item, true
+}
+
+// ObjectFieldsAt returns the declared field schemas for a documented mapping.
+func ObjectFieldsAt(doc *document.Document, id document.NodeID, compiled CompiledSchema) ([]schema.Field, bool) {
+	node, ok := doc.Node(id)
+	shape := schemaNodeAt(doc, id, compiled)
+	if !ok || shape == nil || node.Kind() != document.NodeMapping || shape.Kind != schema.ObjectKind {
+		return nil, false
+	}
+	return append([]schema.Field(nil), shape.Object.Fields...), true
+}
+
+// ObjectFieldSchema returns one declared field from a documented mapping.
+func ObjectFieldSchema(doc *document.Document, id document.NodeID, name string, compiled CompiledSchema) (schema.Field, bool) {
+	fields, ok := ObjectFieldsAt(doc, id, compiled)
+	if !ok {
+		return schema.Field{}, false
+	}
+	for _, field := range fields {
+		if field.Name == name {
+			return field, true
+		}
+	}
+	return schema.Field{}, false
+}
+
 func schemaField(fields []schema.Field, name string) (*schema.Field, bool) {
 	for index := range fields {
 		if fields[index].Name == name {
@@ -233,7 +276,7 @@ func applySchemaDecision(decision schema.Decision, inherited bool) bool {
 	}
 }
 
-func deletionSafe(doc *document.Document, root document.NodeID) bool {
+func deletionSafe(doc *document.Document, roots []document.NodeID) bool {
 	subtree := make(map[document.NodeID]struct{})
 	var collect func(document.NodeID) bool
 	collect = func(id document.NodeID) bool {
@@ -255,8 +298,10 @@ func deletionSafe(doc *document.Document, root document.NodeID) bool {
 		}
 		return true
 	}
-	if !collect(root) {
-		return false
+	for _, root := range roots {
+		if !collect(root) {
+			return false
+		}
 	}
 
 	visited := make(map[document.NodeID]struct{})
