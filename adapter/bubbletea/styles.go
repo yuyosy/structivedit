@@ -33,6 +33,8 @@ type terminalStyles struct {
 	warning        lipgloss.Style
 	info           lipgloss.Style
 	prompt         lipgloss.Style
+	inputError     lipgloss.Style
+	inputArea      lipgloss.Style
 }
 
 func newTerminalStyles(dark bool) terminalStyles {
@@ -42,6 +44,11 @@ func newTerminalStyles(dark bool) terminalStyles {
 		}
 		return lipgloss.NewStyle().Foreground(lipgloss.Color(light))
 	}
+	inputBackground := lipgloss.Color("254")
+	if dark {
+		inputBackground = lipgloss.Color("236")
+	}
+	inputArea := lipgloss.NewStyle().Background(inputBackground)
 	return terminalStyles{
 		plain:          lipgloss.NewStyle(),
 		header:         color("4", "14").Bold(true),
@@ -62,7 +69,9 @@ func newTerminalStyles(dark bool) terminalStyles {
 		error:          color("1", "9").Bold(true),
 		warning:        color("3", "11").Bold(true),
 		info:           color("6", "14"),
-		prompt:         color("6", "14").Bold(true),
+		prompt:         color("4", "14").Background(inputBackground).Bold(true),
+		inputError:     color("1", "9").Background(inputBackground).Bold(true),
+		inputArea:      inputArea,
 	}
 }
 

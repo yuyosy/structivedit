@@ -245,7 +245,7 @@ func (model *Model) render() tea.View {
 	if width < 20 {
 		width = 20
 	}
-	lines := make([]string, 0, end-start+3)
+	lines := make([]string, 0, end-start+5)
 	issueCount := len(model.editor.Issues())
 	state := "Saved"
 	stateStyle := model.styles.saved
@@ -268,6 +268,9 @@ func (model *Model) render() tea.View {
 		lineSegment{text: state, style: stateStyle},
 		lineSegment{text: fmt.Sprintf(" | Cursor: %s | %d visible rows | ", cursorModeText, len(rows)), style: model.styles.muted},
 		lineSegment{text: issueCountText, style: issueCountStyle},
+	))
+	lines = append(lines, model.renderStyledLine(width,
+		lineSegment{text: strings.Repeat("─", width), style: model.styles.tree},
 	))
 	model.hitRegions = model.hitRegions[:0]
 	focused, hasFocus := model.editor.Focused()
@@ -321,19 +324,12 @@ func (model *Model) render() tea.View {
 			model.hitRegions = append(model.hitRegions, hitRegion{line: len(lines) - 1, nodeID: row.nodeID})
 		}
 	}
-	for len(lines)-1 < count {
+	for len(lines)-2 < count {
 		lines = append(lines, "")
 	}
-	lines = append(lines, model.renderStyledLine(width,
-		lineSegment{text: model.promptLine(), style: model.styles.prompt},
-	))
-	footer := model.message
-	if footer == "" {
-		footer = "↑/↓ move · Tab row/value cursor · ←/→ fold · Enter edit · Space toggle · a add · d delete · Ctrl+S save · q quit"
-	}
-	lines = append(lines, model.renderStyledLine(width,
-		lineSegment{text: footer, style: model.styles.muted},
-	))
+	lines = append(lines, model.renderStyledLine(width, model.inputLineSegments()...))
+	lines = append(lines, model.renderStyledLine(width, model.keyboardHelpSegments(0)...))
+	lines = append(lines, model.renderStyledLine(width, model.keyboardHelpSegments(1)...))
 	view := tea.NewView(strings.Join(lines, "\n"))
 	view.AltScreen = true
 	view.MouseMode = tea.MouseModeCellMotion
@@ -367,6 +363,27 @@ func (model *Model) promptLine() string {
 	}
 }
 
+func (model *Model) inputLineSegments() []lineSegment {
+	prompt := model.promptLine()
+	message := model.message
+	if prompt == "" {
+		prompt = message
+		message = ""
+	}
+	if prompt == "" {
+		return nil
+	}
+	segments := []lineSegment{
+		{text: " ", style: model.styles.inputArea},
+		{text: prompt, style: model.styles.prompt},
+	}
+	if message != "" {
+		segments = append(segments, lineSegment{text: "  " + message, style: model.styles.inputError})
+	}
+	segments = append(segments, lineSegment{text: " ", style: model.styles.inputArea})
+	return segments
+}
+
 func schemaKindName(kind schema.Kind) string {
 	switch kind {
 	case schema.StringKind:
@@ -386,9 +403,117 @@ func schemaKindName(kind schema.Kind) string {
 
 func (model *Model) editPath() string {
 	if view, err := model.editor.View(model.edit.nodeID); err == nil {
-		return view.Path.String()
+		return readablePath(model.editor.Document(), view.Path)
 	}
 	return fmt.Sprintf("node %d", model.edit.nodeID)
+}
+
+func readablePath(doc *document.Document, path document.Path) string {
+	if doc == nil {
+		return path.String()
+	}
+	current := doc.Root()
+	result := "$"
+	for _, segment := range path.Segments() {
+		switch typed := segment.(type) {
+		case document.SequenceIndexSegment:
+			items, ok := doc.SequenceItems(current)
+			if !ok || typed.Index() >= len(items) {
+				return path.String()
+			}
+			result += fmt.Sprintf("[%d]", typed.Index())
+			current = items[typed.Index()]
+		case document.MappingEntrySegment:
+			entries, ok := doc.MappingEntries(current)
+			if !ok || typed.EntryIndex() >= len(entries) {
+				return path.String()
+			}
+			entry := entries[typed.EntryIndex()]
+			switch typed.Role() {
+			case document.MappingValueRole:
+				_, suffix := mappingKeyPathLabel(doc, entry.Key, typed.EntryIndex())
+				result += suffix
+				current = entry.Value
+			case document.MappingKeyRole:
+				key, _ := mappingKeyPathLabel(doc, entry.Key, typed.EntryIndex())
+				result += "[mapping key " + key + "]"
+				current = entry.Key
+			default:
+				return path.String()
+			}
+		default:
+			return path.String()
+		}
+	}
+	return result
+}
+
+func mappingKeyPathLabel(doc *document.Document, keyID document.NodeID, index int) (string, string) {
+	node, ok := doc.Node(keyID)
+	if !ok {
+		fallback := fmt.Sprintf("key #%d", index)
+		return fallback, "[" + fallback + "]"
+	}
+	value, scalar := node.ScalarValue()
+	if !scalar {
+		fallback := fmt.Sprintf("key #%d", index)
+		return fallback, "[" + fallback + "]"
+	}
+	text, isString := value.(string)
+	if isString && isPathIdentifier(text) {
+		return text, "." + text
+	}
+	label := formatScalarValue(value)
+	return label, "[" + label + "]"
+}
+
+func isPathIdentifier(value string) bool {
+	runes := []rune(value)
+	if len(runes) == 0 || !(runes[0] == '_' || runes[0] >= 'A' && runes[0] <= 'Z' || runes[0] >= 'a' && runes[0] <= 'z') {
+		return false
+	}
+	for _, char := range runes[1:] {
+		if char == '_' || char == '-' || char >= 'A' && char <= 'Z' || char >= 'a' && char <= 'z' || char >= '0' && char <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func (model *Model) keyboardHelpSegments(line int) []lineSegment {
+	shortcuts := [][][2]string{
+		{
+			{"↑/↓", " move"},
+			{"←/→", " fold"},
+			{"Enter", " edit"},
+			{"Tab", " cursor"},
+			{"Space", " toggle"},
+			{"Alt+↑/↓", " reorder"},
+		},
+		{
+			{"Ctrl+Z", " undo"},
+			{"Ctrl+Y", " redo"},
+			{"Ctrl+S", " save"},
+			{"a", " add"},
+			{"d", " delete"},
+			{"Esc/q", " cancel/quit"},
+		},
+	}
+	if line < 0 || line >= len(shortcuts) {
+		return nil
+	}
+	segments := make([]lineSegment, 0, len(shortcuts[line])*3)
+	for index, shortcut := range shortcuts[line] {
+		if index > 0 {
+			segments = append(segments, lineSegment{text: " · ", style: model.styles.muted})
+		}
+		segments = append(segments,
+			lineSegment{text: shortcut[0], style: model.styles.key.Bold(true)},
+			lineSegment{text: shortcut[1], style: model.styles.muted},
+		)
+	}
+	return segments
 }
 
 func inputWithCursor(input textInput) string {

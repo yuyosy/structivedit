@@ -500,7 +500,7 @@ func (model *Model) fail(err error) {
 }
 
 func (model *Model) visibleRowCount() int {
-	count := model.height - 3
+	count := model.height - 5
 	if count < 1 {
 		return 1
 	}
@@ -561,5 +561,5 @@ func (model *Model) currentDeletePath() string {
 	if err != nil {
 		return fmt.Sprintf("node %d", model.delete.nodeID)
 	}
-	return view.Path.String()
+	return readablePath(model.editor.Document(), view.Path)
 }
