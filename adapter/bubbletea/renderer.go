@@ -22,19 +22,37 @@ func (model *Model) visibleRows() []treeRow {
 		byID[view.ID] = view
 	}
 	rows := make([]treeRow, 0, len(views))
-	var appendNode func(document.NodeID, int, string)
-	appendNode = func(id document.NodeID, depth int, label string) {
+	var appendNode func(document.NodeID, int, string, bool, map[document.NodeID]bool)
+	appendNode = func(id document.NodeID, depth int, label string, readOnly bool, ancestors map[document.NodeID]bool) {
+		if id == 0 || ancestors[id] {
+			return
+		}
 		view, ok := byID[id]
 		if !ok {
 			return
 		}
 		children := visibleChildren(view)
+		var aliasTarget structivedit.NodeView
+		projected := false
+		if len(children) == 0 && model.expandAliases && view.Kind == document.NodeReference && view.HasReferenceTarget && !ancestors[view.ReferenceTarget] {
+			if target, exists := byID[view.ReferenceTarget]; exists {
+				aliasTarget = target
+				children = visibleChildren(target)
+				projected = len(children) > 0
+			}
+		}
+		rowID := id
+		if readOnly {
+			rowID = 0
+			label += " (read-only)"
+		}
 		row := treeRow{
-			nodeID:    id,
+			nodeID:    rowID,
 			depth:     depth,
 			label:     label,
+			focusable: !readOnly,
 			hasChild:  len(children) > 0,
-			expanded:  model.expanded[id],
+			expanded:  readOnly || model.expanded[id],
 			valueText: rowValue(model.editor.Document(), view),
 			issueText: rowIssue(view.Issues),
 		}
@@ -42,23 +60,40 @@ func (model *Model) visibleRows() []treeRow {
 		if !row.hasChild || !row.expanded {
 			return
 		}
+		ancestors[id] = true
+		defer delete(ancestors, id)
 		if view.Kind == document.NodeSequence {
 			for index, child := range children {
-				appendNode(child, depth+1, fmt.Sprintf("[%d]", index))
+				appendNode(child, depth+1, fmt.Sprintf("[%d]", index), readOnly, ancestors)
 			}
 			return
 		}
-		for _, entry := range view.MappingEntries {
+		entries := view.MappingEntries
+		if projected {
+			if ancestors[aliasTarget.ID] {
+				return
+			}
+			ancestors[aliasTarget.ID] = true
+			defer delete(ancestors, aliasTarget.ID)
+			if aliasTarget.Kind == document.NodeSequence {
+				for index, child := range aliasTarget.SequenceItems {
+					appendNode(child, depth+1, fmt.Sprintf("[%d]", index), true, ancestors)
+				}
+				return
+			}
+			entries = aliasTarget.MappingEntries
+		}
+		for _, entry := range entries {
 			key, keyExists := byID[entry.Key]
 			label := "<key>"
 			if keyExists {
 				label = mappingKeyLabel(key)
 			}
-			appendNode(entry.Value, depth+1, label)
+			appendNode(entry.Value, depth+1, label, readOnly || projected, ancestors)
 		}
 	}
 	root := model.editor.Document().Root()
-	appendNode(root, 0, "$")
+	appendNode(root, 0, "$", false, make(map[document.NodeID]bool))
 	return rows
 }
 
@@ -216,21 +251,23 @@ func (model *Model) render() tea.View {
 	if model.editor.IsDirty() {
 		state = "Modified"
 	}
-	lines = append(lines, clipLine(fmt.Sprintf("StructiveEdit | %s | %d visible nodes | %d issues", state, len(rows), issueCount), width))
+	lines = append(lines, clipLine(fmt.Sprintf("StructiveEdit | %s | %d visible rows | %d issues", state, len(rows), issueCount), width))
 	model.hitRegions = model.hitRegions[:0]
 	focused, hasFocus := model.editor.Focused()
 	for index := start; index < end; index++ {
 		row := rows[index]
 		cursor := " "
-		if hasFocus && row.nodeID == focused {
+		if row.focusable && hasFocus && row.nodeID == focused {
 			cursor = ">"
 		}
 		treeMark := "  "
 		if row.hasChild {
-			if row.expanded {
-				treeMark = "- "
-			} else {
-				treeMark = "+ "
+			if row.focusable {
+				if row.expanded {
+					treeMark = "- "
+				} else {
+					treeMark = "+ "
+				}
 			}
 		}
 		line := cursor + strings.Repeat("  ", row.depth) + treeMark + row.label + ": " + row.valueText
@@ -238,7 +275,9 @@ func (model *Model) render() tea.View {
 			line += "  " + row.issueText
 		}
 		lines = append(lines, clipLine(line, width))
-		model.hitRegions = append(model.hitRegions, hitRegion{line: len(lines) - 1, nodeID: row.nodeID})
+		if row.focusable {
+			model.hitRegions = append(model.hitRegions, hitRegion{line: len(lines) - 1, nodeID: row.nodeID})
+		}
 	}
 	for len(lines)-1 < count {
 		lines = append(lines, "")

@@ -44,6 +44,7 @@ type treeRow struct {
 	nodeID    document.NodeID
 	depth     int
 	label     string
+	focusable bool
 	hasChild  bool
 	expanded  bool
 	valueText string
@@ -59,33 +60,42 @@ type hitRegion struct {
 // File I/O stays with the caller; SetSaveHandler connects an explicit save key
 // to the caller's persistence logic.
 type Model struct {
-	editor      *structivedit.Editor
-	mode        mode
-	expanded    map[document.NodeID]bool
-	edit        editBuffer
-	add         addPrompt
-	delete      deletePrompt
-	viewport    viewport
-	width       int
-	height      int
-	message     string
-	saveHandler func() error
-	hitRegions  []hitRegion
+	editor        *structivedit.Editor
+	mode          mode
+	expanded      map[document.NodeID]bool
+	edit          editBuffer
+	add           addPrompt
+	delete        deletePrompt
+	viewport      viewport
+	width         int
+	height        int
+	message       string
+	saveHandler   func() error
+	hitRegions    []hitRegion
+	expandAliases bool
 }
 
 // NewModel creates a terminal model for editor. Containers at the root and
 // one level below it start expanded; deeper content can be opened as needed.
-func NewModel(editor *structivedit.Editor) *Model {
+func NewModel(editor *structivedit.Editor, options ...ModelOption) *Model {
+	settings := modelOptions{}
+	for _, option := range options {
+		if option != nil {
+			option(&settings)
+		}
+	}
 	model := &Model{
-		editor:   editor,
-		expanded: make(map[document.NodeID]bool),
-		width:    100,
-		height:   24,
+		editor:        editor,
+		expanded:      make(map[document.NodeID]bool),
+		width:         100,
+		height:        24,
+		expandAliases: settings.expandAliases,
 	}
 	if editor != nil && editor.Document() != nil {
 		root := editor.Document().Root()
 		_ = editor.Focus(root)
 		model.expandInitial(root, 0)
+		model.expandInitialAliases()
 	}
 	return model
 }
@@ -172,4 +182,26 @@ func visibleChildren(view structivedit.NodeView) []document.NodeID {
 		return children
 	}
 	return nil
+}
+
+func (model *Model) referenceChildren(view structivedit.NodeView) []document.NodeID {
+	if model == nil || !model.expandAliases || view.Kind != document.NodeReference || !view.HasReferenceTarget {
+		return nil
+	}
+	target, err := model.editor.View(view.ReferenceTarget)
+	if err != nil {
+		return nil
+	}
+	return visibleChildren(target)
+}
+
+func (model *Model) expandInitialAliases() {
+	if model == nil || model.editor == nil || !model.expandAliases {
+		return
+	}
+	for _, view := range model.editor.Views() {
+		if len(model.referenceChildren(view)) > 0 {
+			model.expanded[view.ID] = true
+		}
+	}
 }

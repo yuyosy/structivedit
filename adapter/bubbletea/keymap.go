@@ -209,7 +209,7 @@ func (model *Model) focusAdjacent(delta int) {
 	index := -1
 	if id, ok := model.editor.Focused(); ok {
 		for position, row := range rows {
-			if row.nodeID == id {
+			if row.focusable && row.nodeID == id {
 				index = position
 				break
 			}
@@ -224,9 +224,16 @@ func (model *Model) focusAdjacent(delta int) {
 	} else {
 		index += delta
 	}
+	for index >= 0 && index < len(rows) && !rows[index].focusable {
+		index += delta
+	}
 	if index >= 0 && index < len(rows) {
 		model.focus(rows[index].nodeID)
 	}
+}
+
+func (model *Model) hasVisibleChildren(view structivedit.NodeView) bool {
+	return len(visibleChildren(view)) > 0 || len(model.referenceChildren(view)) > 0
 }
 
 func (model *Model) collapseOrFocusParent() {
@@ -238,7 +245,7 @@ func (model *Model) collapseOrFocusParent() {
 	if err != nil {
 		return
 	}
-	if (view.Kind == document.NodeMapping || view.Kind == document.NodeSequence) && model.expanded[id] {
+	if model.hasVisibleChildren(view) && model.expanded[id] {
 		model.expanded[id] = false
 		model.keepFocusVisible()
 		return
@@ -255,6 +262,10 @@ func (model *Model) expandOrFocusChild() {
 	}
 	view, err := model.editor.View(id)
 	if err != nil {
+		return
+	}
+	if len(model.referenceChildren(view)) > 0 {
+		model.expanded[id] = true
 		return
 	}
 	children := visibleChildren(view)
@@ -278,8 +289,8 @@ func (model *Model) enterFocused() {
 		model.fail(err)
 		return
 	}
-	if view.Kind == document.NodeMapping || view.Kind == document.NodeSequence {
-		if len(visibleChildren(view)) > 0 {
+	if view.Kind == document.NodeMapping || view.Kind == document.NodeSequence || len(model.referenceChildren(view)) > 0 {
+		if model.hasVisibleChildren(view) {
 			model.expanded[id] = !model.expanded[id]
 		}
 		return

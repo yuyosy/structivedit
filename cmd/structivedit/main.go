@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -23,10 +24,18 @@ func main() {
 }
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
-	if len(args) != 1 || args[0] == "" {
-		return fmt.Errorf("usage: structivedit <file.yaml>")
+	flags := flag.NewFlagSet("structivedit", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	var expandAliases bool
+	flags.BoolVar(&expandAliases, "expand-aliases", false, "show alias contents as read-only rows")
+	if err := flags.Parse(args); err != nil {
+		return fmt.Errorf("%w\nusage: structivedit [--expand-aliases] <file.yaml>", err)
 	}
-	path := args[0]
+	files := flags.Args()
+	if len(files) != 1 || files[0] == "" {
+		return fmt.Errorf("usage: structivedit [--expand-aliases] <file.yaml>")
+	}
+	path := files[0]
 	file, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("open %s: %w", path, err)
@@ -55,7 +64,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return fmt.Errorf("create editor: %w", err)
 	}
 	editor.MarkClean()
-	model := bubbletea.NewModel(editor)
+	model := bubbletea.NewModel(editor, bubbletea.WithAliasExpansion(expandAliases))
 	model.SetSaveHandler(func() error {
 		var encoded bytes.Buffer
 		if err := session.Encode(&encoded, editor.Document()); err != nil {
