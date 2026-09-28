@@ -13,13 +13,13 @@ import (
 // Editor coordinates an immutable Document, its Schema and Policy, logical
 // focus, and the current validation result.
 type Editor struct {
-	doc          *document.Document
-	schema       resolver.CompiledSchema
-	policy       resolver.CompiledPolicy
-	focused      document.NodeID
-	history      *operation.History
-	issues       []ValidationIssue
-	identity     *editorIdentity
+	doc      *document.Document
+	schema   resolver.CompiledSchema
+	policy   resolver.CompiledPolicy
+	focused  document.NodeID
+	history  *operation.History
+	issues   []ValidationIssue
+	identity *editorIdentity
 }
 
 type editorIdentity struct {
@@ -57,11 +57,11 @@ func New(doc *document.Document, options ...Option) (*Editor, error) {
 		return nil, ErrInvalidPolicy
 	}
 	e := &Editor{
-		doc:          doc,
-		schema:       compiledSchema,
-		policy:       compiledPolicy,
-		history:      operation.NewHistory(settings.historyLimit),
-		identity:     &editorIdentity{marker: 1},
+		doc:      doc,
+		schema:   compiledSchema,
+		policy:   compiledPolicy,
+		history:  operation.NewHistory(settings.historyLimit),
+		identity: &editorIdentity{marker: 1},
 	}
 	e.issues = publicIssues(resolver.ValidateSchema(doc, compiledSchema))
 	return e, nil

@@ -4,9 +4,9 @@ import "github.com/yuyosy/structivedit/document"
 
 // AddNode attaches newly created ownership nodes to a sequence or mapping.
 type AddNode struct {
-	ParentID      document.NodeID
-	ParentKind    document.NodeKind
-	SequenceItems []document.NodeID
+	ParentID       document.NodeID
+	ParentKind     document.NodeKind
+	SequenceItems  []document.NodeID
 	MappingEntries []document.MappingEntry
 }
 

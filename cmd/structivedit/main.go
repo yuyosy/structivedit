@@ -9,10 +9,10 @@ import (
 	"os"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
 	structivedit "github.com/yuyosy/structivedit"
 	"github.com/yuyosy/structivedit/adapter/bubbletea"
 	yamlcodec "github.com/yuyosy/structivedit/codec/yaml"
-	tea "charm.land/bubbletea/v2"
 )
 
 func main() {

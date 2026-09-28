@@ -26,8 +26,8 @@ type recursiveSegment struct{}
 
 func (keySegment) selectorSegment()       {}
 func (indexSegment) selectorSegment()     {}
-func (anyKeySegment) selectorSegment()   {}
-func (anyIndexSegment) selectorSegment() {}
+func (anyKeySegment) selectorSegment()    {}
+func (anyIndexSegment) selectorSegment()  {}
 func (recursiveSegment) selectorSegment() {}
 
 // ParseError identifies a syntax error using a 0-based UTF-8 byte offset.
