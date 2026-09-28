@@ -23,6 +23,14 @@ type Focus struct {
 	NodeID document.NodeID
 }
 
+// Undo restores the previous successful Document mutation.
+type Undo struct{}
+
+// Redo reapplies the next undone Document mutation.
+type Redo struct{}
+
 func (SetValue) action() {}
 func (Toggle) action()   {}
 func (Focus) action()    {}
+func (Undo) action()     {}
+func (Redo) action()     {}

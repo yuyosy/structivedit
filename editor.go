@@ -17,8 +17,8 @@ type Editor struct {
 	schema       resolver.CompiledSchema
 	policy       resolver.CompiledPolicy
 	focused      document.NodeID
+	history      *operation.History
 	issues       []ValidationIssue
-	historyLimit int
 	identity     *editorIdentity
 }
 
@@ -60,7 +60,7 @@ func New(doc *document.Document, options ...Option) (*Editor, error) {
 		doc:          doc,
 		schema:       compiledSchema,
 		policy:       compiledPolicy,
-		historyLimit: settings.historyLimit,
+		history:      operation.NewHistory(settings.historyLimit),
 		identity:     &editorIdentity{marker: 1},
 	}
 	e.issues = publicIssues(resolver.ValidateSchema(doc, compiledSchema))
@@ -102,6 +102,10 @@ func (e *Editor) Apply(action Action) (ApplyResult, error) {
 			return ApplyResult{}, ErrInvalidInput
 		}
 		return e.applyFocus(typed.NodeID)
+	case Undo, *Undo:
+		return e.applyUndo()
+	case Redo, *Redo:
+		return e.applyRedo()
 	default:
 		return ApplyResult{}, ErrInvalidInput
 	}
@@ -152,6 +156,19 @@ func (e *Editor) Focused() (document.NodeID, bool) {
 		return 0, false
 	}
 	return e.focused, true
+}
+
+// IsDirty reports whether the current Document differs from the last position
+// marked clean.
+func (e *Editor) IsDirty() bool {
+	return e != nil && e.history != nil && e.history.Dirty()
+}
+
+// MarkClean records the current Document position as successfully saved.
+func (e *Editor) MarkClean() {
+	if e != nil && e.history != nil {
+		e.history.MarkClean()
+	}
 }
 
 // Issues returns a copy of the most recent complete validation result.
@@ -312,16 +329,19 @@ func (e *Editor) applySetValue(id document.NodeID, value any) (ApplyResult, erro
 	}
 	updatedIssues := publicIssues(resolver.ValidateSchema(updated, e.schema))
 	previousIssues := e.issues
-	e.doc = updated
-	e.issues = cloneValidationIssues(updatedIssues)
-	result := ApplyResult{DocumentChanged: true, Revision: updated.Revision()}
-	result.Events = append(result.Events, Event{
-		Kind:        EventValueChanged,
+	effect := operation.Effect{
+		Kind:        operation.EffectValueChanged,
 		NodeID:      id,
 		BeforeValue: currentValue,
 		AfterValue:  normalized,
-		Revision:    updated.Revision(),
-	})
+	}
+	if err := e.history.Record(e.doc, updated, []document.NodeID{id}, []operation.Effect{effect}); err != nil {
+		return ApplyResult{}, err
+	}
+	e.doc = updated
+	e.issues = cloneValidationIssues(updatedIssues)
+	result := ApplyResult{DocumentChanged: true, Revision: updated.Revision()}
+	result.Events = append(result.Events, eventsForEffects([]operation.Effect{effect}, updated.Revision())...)
 	if !equalIssues(previousIssues, updatedIssues) {
 		result.Events = append(result.Events, Event{
 			Kind:     EventValidationChanged,
@@ -329,6 +349,73 @@ func (e *Editor) applySetValue(id document.NodeID, value any) (ApplyResult, erro
 			Revision: updated.Revision(),
 		})
 	}
+	result.Events = append(result.Events, Event{Kind: EventHistoryChanged, Revision: updated.Revision()})
+	result.Events = cloneEvents(result.Events)
+	return result, nil
+}
+
+func (e *Editor) applyUndo() (ApplyResult, error) {
+	entry := e.history.UndoCandidate()
+	if entry == nil {
+		return ApplyResult{}, ErrNoUndo
+	}
+	builder, err := document.NewBuilderFrom(e.doc)
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	if err := entry.Undo(builder); err != nil {
+		return ApplyResult{}, err
+	}
+	updated, err := builder.Build()
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	updatedIssues := publicIssues(resolver.ValidateSchema(updated, e.schema))
+	if !e.history.CommitUndo() {
+		return ApplyResult{}, ErrNoUndo
+	}
+	previousIssues := e.issues
+	e.doc = updated
+	e.issues = cloneValidationIssues(updatedIssues)
+	result := ApplyResult{DocumentChanged: true, Revision: updated.Revision()}
+	result.Events = append(result.Events, eventsForEffects(entry.Effects(true), updated.Revision())...)
+	if !equalIssues(previousIssues, updatedIssues) {
+		result.Events = append(result.Events, Event{Kind: EventValidationChanged, Issues: cloneValidationIssues(updatedIssues), Revision: updated.Revision()})
+	}
+	result.Events = append(result.Events, Event{Kind: EventHistoryChanged, Revision: updated.Revision()})
+	result.Events = cloneEvents(result.Events)
+	return result, nil
+}
+
+func (e *Editor) applyRedo() (ApplyResult, error) {
+	entry := e.history.RedoCandidate()
+	if entry == nil {
+		return ApplyResult{}, ErrNoRedo
+	}
+	builder, err := document.NewBuilderFrom(e.doc)
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	if err := entry.Apply(builder); err != nil {
+		return ApplyResult{}, err
+	}
+	updated, err := builder.Build()
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	updatedIssues := publicIssues(resolver.ValidateSchema(updated, e.schema))
+	if !e.history.CommitRedo() {
+		return ApplyResult{}, ErrNoRedo
+	}
+	previousIssues := e.issues
+	e.doc = updated
+	e.issues = cloneValidationIssues(updatedIssues)
+	result := ApplyResult{DocumentChanged: true, Revision: updated.Revision()}
+	result.Events = append(result.Events, eventsForEffects(entry.Effects(false), updated.Revision())...)
+	if !equalIssues(previousIssues, updatedIssues) {
+		result.Events = append(result.Events, Event{Kind: EventValidationChanged, Issues: cloneValidationIssues(updatedIssues), Revision: updated.Revision()})
+	}
+	result.Events = append(result.Events, Event{Kind: EventHistoryChanged, Revision: updated.Revision()})
 	result.Events = cloneEvents(result.Events)
 	return result, nil
 }
@@ -408,4 +495,33 @@ func equalIssues(left, right []ValidationIssue) bool {
 		}
 	}
 	return true
+}
+
+func eventsForEffects(effects []operation.Effect, revision document.Revision) []Event {
+	events := make([]Event, 0, len(effects))
+	for _, effect := range effects {
+		event := Event{
+			NodeID:      effect.NodeID,
+			ParentID:    effect.ParentID,
+			FromIndex:   effect.FromIndex,
+			ToIndex:     effect.ToIndex,
+			BeforeValue: effect.BeforeValue,
+			AfterValue:  effect.AfterValue,
+			Revision:    revision,
+		}
+		switch effect.Kind {
+		case operation.EffectValueChanged:
+			event.Kind = EventValueChanged
+		case operation.EffectNodeAdded:
+			event.Kind = EventNodeAdded
+		case operation.EffectNodeDeleted:
+			event.Kind = EventNodeDeleted
+		case operation.EffectNodeMoved:
+			event.Kind = EventNodeMoved
+		default:
+			continue
+		}
+		events = append(events, event)
+	}
+	return events
 }

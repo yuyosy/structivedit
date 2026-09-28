@@ -21,4 +21,8 @@ var (
 	ErrReferenceReadOnly = errors.New("structivedit: reference is read only")
 	// ErrTypeMismatch reports an input whose scalar kind differs from the existing node.
 	ErrTypeMismatch = errors.New("structivedit: scalar type mismatch")
+	// ErrNoUndo reports that no retained Document operation can be undone.
+	ErrNoUndo = errors.New("structivedit: no operation to undo")
+	// ErrNoRedo reports that no retained Document operation can be redone.
+	ErrNoRedo = errors.New("structivedit: no operation to redo")
 )
