@@ -500,11 +500,20 @@ func (model *Model) fail(err error) {
 }
 
 func (model *Model) visibleRowCount() int {
-	count := model.height - 5
+	count := model.height - 4 - model.inputAreaLineCount()
 	if count < 1 {
 		return 1
 	}
 	return count
+}
+
+func (model *Model) inputAreaLineCount() int {
+	switch model.mode {
+	case editMode, addFieldMode, addValueMode:
+		return 2
+	default:
+		return 1
+	}
 }
 
 func (model *Model) scroll(delta int) {

@@ -22,6 +22,7 @@ type terminalStyles struct {
 	tree           lipgloss.Style
 	key            lipgloss.Style
 	focus          lipgloss.Style
+	shortcutKey    lipgloss.Style
 	readOnly       lipgloss.Style
 	stringValue    lipgloss.Style
 	booleanValue   lipgloss.Style
@@ -32,8 +33,12 @@ type terminalStyles struct {
 	error          lipgloss.Style
 	warning        lipgloss.Style
 	info           lipgloss.Style
-	prompt         lipgloss.Style
+	inputLabel     lipgloss.Style
+	inputPath      lipgloss.Style
+	inputText      lipgloss.Style
+	inputCursor    lipgloss.Style
 	inputError     lipgloss.Style
+	contextArea    lipgloss.Style
 	inputArea      lipgloss.Style
 }
 
@@ -45,9 +50,12 @@ func newTerminalStyles(dark bool) terminalStyles {
 		return lipgloss.NewStyle().Foreground(lipgloss.Color(light))
 	}
 	inputBackground := lipgloss.Color("254")
+	contextBackground := lipgloss.Color("252")
 	if dark {
 		inputBackground = lipgloss.Color("236")
+		contextBackground = lipgloss.Color("238")
 	}
+	contextArea := lipgloss.NewStyle().Background(contextBackground)
 	inputArea := lipgloss.NewStyle().Background(inputBackground)
 	return terminalStyles{
 		plain:          lipgloss.NewStyle(),
@@ -59,18 +67,23 @@ func newTerminalStyles(dark bool) terminalStyles {
 		tree:           color("4", "12"),
 		key:            color("6", "14"),
 		focus:          color("3", "11").Bold(true),
+		shortcutKey:    lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Bold(true),
 		readOnly:       color("0", "8"),
 		stringValue:    color("2", "10"),
-		booleanValue:   color("3", "11"),
+		booleanValue:   color("6", "14"),
 		numberValue:    color("5", "13"),
 		nullValue:      color("0", "8"),
 		containerValue: color("4", "12"),
-		referenceValue: color("5", "13"),
+		referenceValue: color("130", "208"),
 		error:          color("1", "9").Bold(true),
 		warning:        color("3", "11").Bold(true),
 		info:           color("6", "14"),
-		prompt:         color("4", "14").Background(inputBackground).Bold(true),
-		inputError:     color("1", "9").Background(inputBackground).Bold(true),
+		inputLabel:     color("0", "8").Background(contextBackground),
+		inputPath:      color("4", "14").Background(contextBackground).Bold(true),
+		inputText:      color("0", "15").Background(inputBackground),
+		inputCursor:    color("0", "11").Background(inputBackground).Bold(true),
+		inputError:     color("1", "9").Background(contextBackground).Bold(true),
+		contextArea:    contextArea,
 		inputArea:      inputArea,
 	}
 }

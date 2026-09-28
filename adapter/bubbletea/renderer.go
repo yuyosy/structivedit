@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	lipgloss "charm.land/lipgloss/v2"
 	"github.com/yuyosy/structivedit"
 	"github.com/yuyosy/structivedit/document"
 	"github.com/yuyosy/structivedit/schema"
@@ -270,7 +271,7 @@ func (model *Model) render() tea.View {
 		lineSegment{text: issueCountText, style: issueCountStyle},
 	))
 	lines = append(lines, model.renderStyledLine(width,
-		lineSegment{text: strings.Repeat("─", width), style: model.styles.tree},
+		lineSegment{text: strings.Repeat("─", width), style: model.styles.muted},
 	))
 	model.hitRegions = model.hitRegions[:0]
 	focused, hasFocus := model.editor.Focused()
@@ -327,7 +328,9 @@ func (model *Model) render() tea.View {
 	for len(lines)-2 < count {
 		lines = append(lines, "")
 	}
-	lines = append(lines, model.renderStyledLine(width, model.inputLineSegments()...))
+	for _, inputLine := range model.inputAreaLines(width) {
+		lines = append(lines, model.renderStyledLine(width, inputLine...))
+	}
 	lines = append(lines, model.renderStyledLine(width, model.keyboardHelpSegments(0)...))
 	lines = append(lines, model.renderStyledLine(width, model.keyboardHelpSegments(1)...))
 	view := tea.NewView(strings.Join(lines, "\n"))
@@ -336,52 +339,161 @@ func (model *Model) render() tea.View {
 	return view
 }
 
-func (model *Model) promptLine() string {
+func (model *Model) inputAreaLines(width int) [][]lineSegment {
 	switch model.mode {
 	case editMode:
-		return fmt.Sprintf("Edit %s > %s", model.editPath(), inputWithCursor(model.edit.value))
+		context := []lineSegment{
+			{text: "", style: model.styles.inputLabel},
+			{text: model.editPath(), style: model.styles.inputPath},
+		}
+		return model.inputPromptLines(width, context, model.edit.value)
 	case addFieldMode:
-		return "Add mapping field > " + inputWithCursor(model.add.field)
+		context := []lineSegment{{text: " Add mapping field", style: model.styles.inputLabel}}
+		return model.inputPromptLines(width, context, model.add.field)
 	case addValueMode:
 		if model.add.inputAt < 0 || model.add.inputAt >= len(model.add.plan.Inputs) {
-			return "Add values"
+			return [][]lineSegment{nil, model.fullWidthLine(width, nil, model.styles.inputArea)}
 		}
 		request := model.add.plan.Inputs[model.add.inputAt]
 		optional := "required"
 		if request.HasDefault {
 			optional = "default " + defaultInputText(request.Default)
 		}
-		return fmt.Sprintf("Add %s (%s, %d/%d, %s) > %s", request.Label, schemaKindName(request.ExpectedKind), model.add.inputAt+1, len(model.add.plan.Inputs), optional, inputWithCursor(model.add.input))
+		context := []lineSegment{{
+			text:  fmt.Sprintf(" Add %s (%s, %d/%d, %s)", request.Label, schemaKindName(request.ExpectedKind), model.add.inputAt+1, len(model.add.plan.Inputs), optional),
+			style: model.styles.inputLabel,
+		}}
+		return model.inputPromptLines(width, context, model.add.input)
 	case deleteConfirmMode:
 		choice := "[Cancel]  Confirm"
 		if model.delete.confirm {
 			choice = "Cancel  [Confirm]"
 		}
-		return fmt.Sprintf("Delete %s?  %s  (Tab changes, Enter selects, Esc cancels)", model.currentDeletePath(), choice)
+		segments := []lineSegment{
+			{text: " Delete ", style: model.styles.inputLabel},
+			{text: model.currentDeletePath(), style: model.styles.inputPath},
+			{text: "?  " + choice + "  (Tab changes, Enter selects, Esc cancels)", style: model.styles.inputLabel},
+		}
+		if model.message != "" {
+			segments = append(segments, lineSegment{text: "  " + model.message, style: model.styles.inputError})
+		}
+		return [][]lineSegment{model.fullWidthLine(width, segments, model.styles.contextArea)}
 	default:
-		return ""
+		if model.message == "" {
+			return [][]lineSegment{nil}
+		}
+		return [][]lineSegment{model.fullWidthLine(width,
+			[]lineSegment{{text: " " + model.message, style: model.styles.inputLabel}},
+			model.styles.contextArea,
+		)}
 	}
 }
 
-func (model *Model) inputLineSegments() []lineSegment {
-	prompt := model.promptLine()
-	message := model.message
-	if prompt == "" {
-		prompt = message
-		message = ""
+func (model *Model) inputPromptLines(width int, context []lineSegment, input textInput) [][]lineSegment {
+	if model.message != "" {
+		context = append(context, lineSegment{text: "  " + model.message, style: model.styles.inputError})
 	}
-	if prompt == "" {
+	context = append([]lineSegment{{text: " ", style: model.styles.contextArea}}, context...)
+	contextLine := model.fullWidthLine(width, context, model.styles.contextArea)
+	inputLine := model.inputValueLine(width, input)
+	return [][]lineSegment{contextLine, inputLine}
+}
+
+func (model *Model) inputValueLine(width int, input textInput) []lineSegment {
+	before, after := inputWindow(input, width-2)
+	segments := []lineSegment{{text: " ", style: model.styles.inputArea}}
+	if before != "" {
+		segments = append(segments, lineSegment{text: before, style: model.styles.inputText})
+	}
+	segments = append(segments, lineSegment{text: "|", style: model.styles.inputCursor})
+	if after != "" {
+		segments = append(segments, lineSegment{text: after, style: model.styles.inputText})
+	}
+	return model.fullWidthLine(width, segments, model.styles.inputArea)
+}
+
+func (model *Model) fullWidthLine(width int, segments []lineSegment, background lipgloss.Style) []lineSegment {
+	if width <= 0 {
 		return nil
 	}
-	segments := []lineSegment{
-		{text: " ", style: model.styles.inputArea},
-		{text: prompt, style: model.styles.prompt},
+	length := 0
+	for _, segment := range segments {
+		length += len([]rune(segment.text))
 	}
-	if message != "" {
-		segments = append(segments, lineSegment{text: "  " + message, style: model.styles.inputError})
+	limit := width
+	truncated := length > width
+	if truncated {
+		limit--
 	}
-	segments = append(segments, lineSegment{text: " ", style: model.styles.inputArea})
-	return segments
+	result := make([]lineSegment, 0, len(segments)+1)
+	remaining := limit
+	for _, segment := range segments {
+		if remaining == 0 {
+			break
+		}
+		runes := []rune(segment.text)
+		if len(runes) > remaining {
+			runes = runes[:remaining]
+		}
+		if len(runes) > 0 {
+			result = append(result, lineSegment{text: string(runes), style: segment.style})
+			remaining -= len(runes)
+		}
+	}
+	if truncated {
+		result = append(result, lineSegment{text: "…", style: background})
+	} else if remaining > 0 {
+		result = append(result, lineSegment{text: strings.Repeat(" ", remaining), style: background})
+	}
+	return result
+}
+
+func inputWindow(input textInput, width int) (string, string) {
+	runes := input.runes
+	position := input.cursor
+	if position < 0 {
+		position = 0
+	}
+	if position > len(runes) {
+		position = len(runes)
+	}
+	if width <= 0 || len(runes) <= width {
+		return string(runes[:position]), string(runes[position:])
+	}
+	start := position - width/2
+	if start < 0 {
+		start = 0
+	}
+	end := start + width
+	if end > len(runes) {
+		end = len(runes)
+		start = end - width
+	}
+	for end-start+(boolInt(start > 0))+boolInt(end < len(runes)) > width {
+		if end > position {
+			end--
+		} else if start < position {
+			start++
+		} else {
+			break
+		}
+	}
+	before := string(runes[start:position])
+	after := string(runes[position:end])
+	if start > 0 {
+		before = "…" + before
+	}
+	if end < len(runes) {
+		after += "…"
+	}
+	return before, after
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func schemaKindName(kind schema.Kind) string {
@@ -506,25 +618,12 @@ func (model *Model) keyboardHelpSegments(line int) []lineSegment {
 	segments := make([]lineSegment, 0, len(shortcuts[line])*3)
 	for index, shortcut := range shortcuts[line] {
 		if index > 0 {
-			segments = append(segments, lineSegment{text: " · ", style: model.styles.muted})
+			segments = append(segments, lineSegment{text: "  ", style: model.styles.muted})
 		}
 		segments = append(segments,
-			lineSegment{text: shortcut[0], style: model.styles.key.Bold(true)},
+			lineSegment{text: shortcut[0], style: model.styles.shortcutKey},
 			lineSegment{text: shortcut[1], style: model.styles.muted},
 		)
 	}
 	return segments
-}
-
-func inputWithCursor(input textInput) string {
-	value := input.String()
-	runes := []rune(value)
-	position := input.cursor
-	if position < 0 {
-		position = 0
-	}
-	if position > len(runes) {
-		position = len(runes)
-	}
-	return string(runes[:position]) + "|" + string(runes[position:])
 }
