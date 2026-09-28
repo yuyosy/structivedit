@@ -258,11 +258,15 @@ func (model *Model) render() tea.View {
 	if issueCount > 0 {
 		issueCountStyle = model.styles.error
 	}
+	cursorModeText := "Row head"
+	if model.cursorMode == valueCellCursor {
+		cursorModeText = "Value cell"
+	}
 	lines = append(lines, model.renderStyledLine(width,
 		lineSegment{text: "StructiveEdit", style: model.styles.header},
 		lineSegment{text: " | ", style: model.styles.plain},
 		lineSegment{text: state, style: stateStyle},
-		lineSegment{text: fmt.Sprintf(" | %d visible rows | ", len(rows)), style: model.styles.muted},
+		lineSegment{text: fmt.Sprintf(" | Cursor: %s | %d visible rows | ", cursorModeText, len(rows)), style: model.styles.muted},
 		lineSegment{text: issueCountText, style: issueCountStyle},
 	))
 	model.hitRegions = model.hitRegions[:0]
@@ -271,12 +275,18 @@ func (model *Model) render() tea.View {
 		row := rows[index]
 		cursor := " "
 		cursorStyle := model.styles.plain
+		valueCursor := ""
 		labelStyle := model.styles.key
 		valueStyle := model.valueStyle(row.valueText)
 		if row.focusable && hasFocus && row.nodeID == focused {
-			cursor = ">"
-			cursorStyle = model.styles.cursor
 			labelStyle = model.styles.focus
+			if model.cursorMode == valueCellCursor {
+				valueCursor = "> "
+				valueStyle = valueStyle.Underline(true).Bold(true)
+			} else {
+				cursor = ">"
+				cursorStyle = model.styles.cursor
+			}
 		}
 		if !row.focusable {
 			labelStyle = model.styles.readOnly
@@ -297,6 +307,7 @@ func (model *Model) render() tea.View {
 			{text: treeMark, style: model.styles.tree},
 			{text: row.label, style: labelStyle},
 			{text: ": ", style: model.styles.plain},
+			{text: valueCursor, style: model.styles.cursor},
 			{text: row.valueText, style: valueStyle},
 		}
 		if row.issueText != "" {
@@ -318,7 +329,7 @@ func (model *Model) render() tea.View {
 	))
 	footer := model.message
 	if footer == "" {
-		footer = "↑/↓ move · ←/→ fold · Enter edit · Space toggle · a add · d delete · Ctrl+S save · q quit"
+		footer = "↑/↓ move · Tab row/value cursor · ←/→ fold · Enter edit · Space toggle · a add · d delete · Ctrl+S save · q quit"
 	}
 	lines = append(lines, model.renderStyledLine(width,
 		lineSegment{text: footer, style: model.styles.muted},

@@ -68,6 +68,8 @@ func (model *Model) handleBrowseKey(key tea.Key) (tea.Model, tea.Cmd) {
 		model.scroll(-model.visibleRowCount())
 	case tea.KeyPgDown:
 		model.scroll(model.visibleRowCount())
+	case tea.KeyTab:
+		model.toggleCursorMode()
 	default:
 		if key.Mod != 0 {
 			return model, nil
@@ -84,6 +86,14 @@ func (model *Model) handleBrowseKey(key tea.Key) (tea.Model, tea.Cmd) {
 		}
 	}
 	return model, nil
+}
+
+func (model *Model) toggleCursorMode() {
+	if model.cursorMode == rowHeadCursor {
+		model.cursorMode = valueCellCursor
+		return
+	}
+	model.cursorMode = rowHeadCursor
 }
 
 func (model *Model) handleEditKey(key tea.Key) {

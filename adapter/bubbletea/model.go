@@ -17,6 +17,13 @@ const (
 	deleteConfirmMode
 )
 
+type cursorMode uint8
+
+const (
+	rowHeadCursor cursorMode = iota
+	valueCellCursor
+)
+
 type editBuffer struct {
 	nodeID document.NodeID
 	value  textInput
@@ -62,6 +69,7 @@ type hitRegion struct {
 type Model struct {
 	editor        *structivedit.Editor
 	mode          mode
+	cursorMode    cursorMode
 	expanded      map[document.NodeID]bool
 	edit          editBuffer
 	add           addPrompt

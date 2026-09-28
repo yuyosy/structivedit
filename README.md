@@ -31,6 +31,7 @@ Keyboard controls:
 | Key | Action |
 |---|---|
 | Up / Down | Move focus through visible nodes |
+| Tab | Switch between row-head and Value-cell cursor modes |
 | Left / Right | Collapse or expand a container; move to its parent or first child |
 | Enter | Edit a scalar or expand/collapse a container |
 | Space | Toggle a boolean |
