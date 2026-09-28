@@ -17,13 +17,14 @@ and Bubble Tea adapter stay in separate packages.
 Run the editor from a checkout:
 
 ```sh
-go run ./cmd/structivedit [--expand-aliases] config.yaml
+go run ./cmd/structivedit [--expand-aliases] [--no-color] config.yaml
 ```
 
 The CLI opens one existing file. It writes only after Ctrl+S. Press `q` or
 Escape to leave the editor; if the document is dirty, choose discard or return
 to editing. Ctrl+S errors stay visible in the editor and do not clear dirty
-state. `--expand-aliases` displays alias targets as read-only rows.
+state. `--expand-aliases` displays alias targets as read-only rows. `--no-color`
+disables colors; the `NO_COLOR` environment variable does the same.
 
 Keyboard controls:
 
@@ -140,7 +141,8 @@ byte-for-byte source reproduction is not promised. Unrepresentable node or tag
 payloads and multiple documents return errors instead of being silently
 discarded. Bubble Tea alias expansion is optional; when enabled, collection
 aliases show their target entries as read-only rows. Saving still preserves
-the original alias and merge-key structure.
+the original alias and merge-key structure. Color output adapts to the terminal
+background and can be disabled with `bubbletea.WithColors(false)`.
 
 ## Development
 

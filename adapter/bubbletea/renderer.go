@@ -248,17 +248,39 @@ func (model *Model) render() tea.View {
 	lines := make([]string, 0, end-start+3)
 	issueCount := len(model.editor.Issues())
 	state := "Saved"
+	stateStyle := model.styles.saved
 	if model.editor.IsDirty() {
 		state = "Modified"
+		stateStyle = model.styles.modified
 	}
-	lines = append(lines, clipLine(fmt.Sprintf("StructiveEdit | %s | %d visible rows | %d issues", state, len(rows), issueCount), width))
+	issueCountText := fmt.Sprintf("%d issues", issueCount)
+	issueCountStyle := model.styles.muted
+	if issueCount > 0 {
+		issueCountStyle = model.styles.error
+	}
+	lines = append(lines, model.renderStyledLine(width,
+		lineSegment{text: "StructiveEdit", style: model.styles.header},
+		lineSegment{text: " | ", style: model.styles.plain},
+		lineSegment{text: state, style: stateStyle},
+		lineSegment{text: fmt.Sprintf(" | %d visible rows | ", len(rows)), style: model.styles.muted},
+		lineSegment{text: issueCountText, style: issueCountStyle},
+	))
 	model.hitRegions = model.hitRegions[:0]
 	focused, hasFocus := model.editor.Focused()
 	for index := start; index < end; index++ {
 		row := rows[index]
 		cursor := " "
+		cursorStyle := model.styles.plain
+		labelStyle := model.styles.key
+		valueStyle := model.valueStyle(row.valueText)
 		if row.focusable && hasFocus && row.nodeID == focused {
 			cursor = ">"
+			cursorStyle = model.styles.cursor
+			labelStyle = model.styles.focus
+		}
+		if !row.focusable {
+			labelStyle = model.styles.readOnly
+			valueStyle = model.styles.readOnly
 		}
 		treeMark := "  "
 		if row.hasChild {
@@ -270,11 +292,20 @@ func (model *Model) render() tea.View {
 				}
 			}
 		}
-		line := cursor + strings.Repeat("  ", row.depth) + treeMark + row.label + ": " + row.valueText
-		if row.issueText != "" {
-			line += "  " + row.issueText
+		segments := []lineSegment{
+			{text: cursor + strings.Repeat("  ", row.depth), style: cursorStyle},
+			{text: treeMark, style: model.styles.tree},
+			{text: row.label, style: labelStyle},
+			{text: ": ", style: model.styles.plain},
+			{text: row.valueText, style: valueStyle},
 		}
-		lines = append(lines, clipLine(line, width))
+		if row.issueText != "" {
+			segments = append(segments,
+				lineSegment{text: "  ", style: model.styles.plain},
+				lineSegment{text: row.issueText, style: model.issueStyle(row.issueText)},
+			)
+		}
+		lines = append(lines, model.renderStyledLine(width, segments...))
 		if row.focusable {
 			model.hitRegions = append(model.hitRegions, hitRegion{line: len(lines) - 1, nodeID: row.nodeID})
 		}
@@ -282,12 +313,16 @@ func (model *Model) render() tea.View {
 	for len(lines)-1 < count {
 		lines = append(lines, "")
 	}
-	lines = append(lines, clipLine(model.promptLine(), width))
+	lines = append(lines, model.renderStyledLine(width,
+		lineSegment{text: model.promptLine(), style: model.styles.prompt},
+	))
 	footer := model.message
 	if footer == "" {
 		footer = "↑/↓ move · ←/→ fold · Enter edit · Space toggle · a add · d delete · Ctrl+S save · q quit"
 	}
-	lines = append(lines, clipLine(footer, width))
+	lines = append(lines, model.renderStyledLine(width,
+		lineSegment{text: footer, style: model.styles.muted},
+	))
 	view := tea.NewView(strings.Join(lines, "\n"))
 	view.AltScreen = true
 	view.MouseMode = tea.MouseModeCellMotion
@@ -356,18 +391,4 @@ func inputWithCursor(input textInput) string {
 		position = len(runes)
 	}
 	return string(runes[:position]) + "|" + string(runes[position:])
-}
-
-func clipLine(line string, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	runes := []rune(line)
-	if len(runes) <= width {
-		return line
-	}
-	if width == 1 {
-		return "…"
-	}
-	return string(runes[:width-1]) + "…"
 }

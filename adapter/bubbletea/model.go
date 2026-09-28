@@ -73,12 +73,14 @@ type Model struct {
 	saveHandler   func() error
 	hitRegions    []hitRegion
 	expandAliases bool
+	colorsEnabled bool
+	styles        terminalStyles
 }
 
 // NewModel creates a terminal model for editor. Containers at the root and
 // one level below it start expanded; deeper content can be opened as needed.
 func NewModel(editor *structivedit.Editor, options ...ModelOption) *Model {
-	settings := modelOptions{}
+	settings := modelOptions{colors: true}
 	for _, option := range options {
 		if option != nil {
 			option(&settings)
@@ -90,6 +92,8 @@ func NewModel(editor *structivedit.Editor, options ...ModelOption) *Model {
 		width:         100,
 		height:        24,
 		expandAliases: settings.expandAliases,
+		colorsEnabled: settings.colors,
+		styles:        newTerminalStyles(true),
 	}
 	if editor != nil && editor.Document() != nil {
 		root := editor.Document().Root()
@@ -118,7 +122,12 @@ func (model *Model) SetSaveHandler(handler func() error) {
 }
 
 // Init implements tea.Model.
-func (model *Model) Init() tea.Cmd { return nil }
+func (model *Model) Init() tea.Cmd {
+	if !model.colorsActive() {
+		return nil
+	}
+	return func() tea.Msg { return tea.RequestBackgroundColor() }
+}
 
 // Update implements tea.Model.
 func (model *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
@@ -140,6 +149,8 @@ func (model *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model.width = typed.Width
 		model.height = typed.Height
 		model.keepFocusVisible()
+	case tea.BackgroundColorMsg:
+		model.styles = newTerminalStyles(typed.IsDark())
 	case tea.KeyPressMsg:
 		return model.handleKey(typed.Key())
 	case tea.MouseClickMsg:
