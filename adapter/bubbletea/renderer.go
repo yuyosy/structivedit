@@ -216,7 +216,7 @@ func (model *Model) render() tea.View {
 	if model.editor.IsDirty() {
 		state = "Modified"
 	}
-	lines = append(lines, clipLine(fmt.Sprintf("StructiveEdit | %s | %d nodes | %d issues", state, len(rows), issueCount), width))
+	lines = append(lines, clipLine(fmt.Sprintf("StructiveEdit | %s | %d visible nodes | %d issues", state, len(rows), issueCount), width))
 	model.hitRegions = model.hitRegions[:0]
 	focused, hasFocus := model.editor.Focused()
 	for index := start; index < end; index++ {

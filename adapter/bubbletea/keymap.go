@@ -353,10 +353,15 @@ func (model *Model) loadAddInput() {
 	}
 	request := model.add.plan.Inputs[model.add.inputAt]
 	value := ""
-	if request.HasDefault {
+	touched := false
+	if previous, ok := model.add.values[request.ID]; ok {
+		value = defaultInputText(previous)
+		touched = true
+	} else if request.HasDefault {
 		value = defaultInputText(request.Default)
 	}
 	model.add.input = newTextInput(value)
+	model.add.input.touched = touched
 }
 
 func (model *Model) storeAddInput() error {
