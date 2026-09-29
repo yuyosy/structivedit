@@ -28,14 +28,16 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	flags.SetOutput(io.Discard)
 	var expandAliases bool
 	var noColor bool
+	var inlineEdit bool
 	flags.BoolVar(&expandAliases, "expand-aliases", false, "show alias contents as read-only rows")
 	flags.BoolVar(&noColor, "no-color", false, "disable terminal colors")
+	flags.BoolVar(&inlineEdit, "inline-edit", false, "edit scalar values in their tree rows")
 	if err := flags.Parse(args); err != nil {
-		return fmt.Errorf("%w\nusage: structivedit [--expand-aliases] [--no-color] <file.yaml>", err)
+		return fmt.Errorf("%w\nusage: structivedit [--expand-aliases] [--no-color] [--inline-edit] <file.yaml>", err)
 	}
 	files := flags.Args()
 	if len(files) != 1 || files[0] == "" {
-		return fmt.Errorf("usage: structivedit [--expand-aliases] [--no-color] <file.yaml>")
+		return fmt.Errorf("usage: structivedit [--expand-aliases] [--no-color] [--inline-edit] <file.yaml>")
 	}
 	path := files[0]
 	file, err := os.Open(path)
@@ -70,6 +72,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		editor,
 		bubbletea.WithAliasExpansion(expandAliases),
 		bubbletea.WithColors(!noColor),
+		bubbletea.WithInlineEditing(inlineEdit),
 	)
 	model.SetSaveHandler(func() error {
 		var encoded bytes.Buffer

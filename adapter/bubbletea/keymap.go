@@ -509,7 +509,12 @@ func (model *Model) visibleRowCount() int {
 
 func (model *Model) inputAreaLineCount() int {
 	switch model.mode {
-	case editMode, addFieldMode, addValueMode:
+	case editMode:
+		if model.inlineEditing {
+			return 1
+		}
+		return 2
+	case addFieldMode, addValueMode:
 		return 2
 	default:
 		return 1

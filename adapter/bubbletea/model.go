@@ -82,6 +82,7 @@ type Model struct {
 	hitRegions    []hitRegion
 	expandAliases bool
 	colorsEnabled bool
+	inlineEditing bool
 	styles        terminalStyles
 }
 
@@ -101,6 +102,7 @@ func NewModel(editor *structivedit.Editor, options ...ModelOption) *Model {
 		height:        24,
 		expandAliases: settings.expandAliases,
 		colorsEnabled: settings.colors,
+		inlineEditing: settings.inlineEditing,
 		styles:        newTerminalStyles(true),
 	}
 	if editor != nil && editor.Document() != nil {

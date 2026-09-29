@@ -246,7 +246,7 @@ func (model *Model) render() tea.View {
 	if width < 20 {
 		width = 20
 	}
-	lines := make([]string, 0, end-start+5)
+	lines := make([]string, 0, end-start+4+model.inputAreaLineCount())
 	issueCount := len(model.editor.Issues())
 	state := "Saved"
 	stateStyle := model.styles.saved
@@ -277,6 +277,7 @@ func (model *Model) render() tea.View {
 	focused, hasFocus := model.editor.Focused()
 	for index := start; index < end; index++ {
 		row := rows[index]
+		inlineEditing := model.inlineEditing && model.mode == editMode && row.nodeID == model.edit.nodeID
 		cursor := " "
 		cursorStyle := model.styles.plain
 		valueCursor := ""
@@ -284,12 +285,14 @@ func (model *Model) render() tea.View {
 		valueStyle := model.valueStyle(row.valueText)
 		if row.focusable && hasFocus && row.nodeID == focused {
 			labelStyle = model.styles.focus
-			if model.cursorMode == valueCellCursor {
-				valueCursor = "> "
-				valueStyle = valueStyle.Underline(true).Bold(true)
-			} else {
-				cursor = ">"
-				cursorStyle = model.styles.cursor
+			if !inlineEditing {
+				if model.cursorMode == valueCellCursor {
+					valueCursor = "> "
+					valueStyle = valueStyle.Underline(true).Bold(true)
+				} else {
+					cursor = ">"
+					cursorStyle = model.styles.cursor
+				}
 			}
 		}
 		if !row.focusable {
@@ -311,10 +314,22 @@ func (model *Model) render() tea.View {
 			{text: treeMark, style: model.styles.tree},
 			{text: row.label, style: labelStyle},
 			{text: ": ", style: model.styles.plain},
-			{text: valueCursor, style: model.styles.cursor},
-			{text: row.valueText, style: valueStyle},
 		}
-		if row.issueText != "" {
+		if inlineEditing {
+			prefixWidth := lineSegmentWidth(segments)
+			maxPrefixWidth := width - 8
+			if prefixWidth > maxPrefixWidth {
+				segments = clipLineSegments(segments, maxPrefixWidth, model.styles.muted)
+				prefixWidth = lineSegmentWidth(segments)
+			}
+			segments = append(segments, model.inlineInputSegments(model.edit.value, width-prefixWidth)...)
+		} else {
+			segments = append(segments,
+				lineSegment{text: valueCursor, style: model.styles.cursor},
+				lineSegment{text: row.valueText, style: valueStyle},
+			)
+		}
+		if row.issueText != "" && !inlineEditing {
 			segments = append(segments,
 				lineSegment{text: "  ", style: model.styles.plain},
 				lineSegment{text: row.issueText, style: model.issueStyle(row.issueText)},
@@ -342,9 +357,19 @@ func (model *Model) render() tea.View {
 func (model *Model) inputAreaLines(width int) [][]lineSegment {
 	switch model.mode {
 	case editMode:
+		label := " Edit "
+		if model.inlineEditing {
+			label = " Editing inline "
+		}
 		context := []lineSegment{
-			{text: "", style: model.styles.inputLabel},
+			{text: label, style: model.styles.inputLabel},
 			{text: model.editPath(), style: model.styles.inputPath},
+		}
+		if model.inlineEditing {
+			if model.message != "" {
+				context = append(context, lineSegment{text: "  " + model.message, style: model.styles.inputError})
+			}
+			return [][]lineSegment{model.fullWidthLine(width, append([]lineSegment{{text: " ", style: model.styles.contextArea}}, context...), model.styles.contextArea)}
 		}
 		return model.inputPromptLines(width, context, model.edit.value)
 	case addFieldMode:
@@ -410,6 +435,55 @@ func (model *Model) inputValueLine(width int, input textInput) []lineSegment {
 		segments = append(segments, lineSegment{text: after, style: model.styles.inputText})
 	}
 	return model.fullWidthLine(width, segments, model.styles.inputArea)
+}
+
+func (model *Model) inlineInputSegments(input textInput, width int) []lineSegment {
+	if width <= 0 {
+		return nil
+	}
+	before, after := inputWindow(input, width-1)
+	segments := make([]lineSegment, 0, 3)
+	if before != "" {
+		segments = append(segments, lineSegment{text: before, style: model.styles.inputText})
+	}
+	segments = append(segments, lineSegment{text: "|", style: model.styles.inputCursor})
+	if after != "" {
+		segments = append(segments, lineSegment{text: after, style: model.styles.inputText})
+	}
+	return model.fullWidthLine(width, segments, model.styles.inputArea)
+}
+
+func lineSegmentWidth(segments []lineSegment) int {
+	width := 0
+	for _, segment := range segments {
+		width += len([]rune(segment.text))
+	}
+	return width
+}
+
+func clipLineSegments(segments []lineSegment, width int, ellipsisStyle lipgloss.Style) []lineSegment {
+	if width <= 0 {
+		return nil
+	}
+	if lineSegmentWidth(segments) <= width {
+		return segments
+	}
+	remaining := width - 1
+	result := make([]lineSegment, 0, len(segments)+1)
+	for _, segment := range segments {
+		if remaining == 0 {
+			break
+		}
+		runes := []rune(segment.text)
+		if len(runes) > remaining {
+			runes = runes[:remaining]
+		}
+		if len(runes) > 0 {
+			result = append(result, lineSegment{text: string(runes), style: segment.style})
+			remaining -= len(runes)
+		}
+	}
+	return append(result, lineSegment{text: "…", style: ellipsisStyle})
 }
 
 func (model *Model) fullWidthLine(width int, segments []lineSegment, background lipgloss.Style) []lineSegment {
@@ -611,6 +685,9 @@ func (model *Model) keyboardHelpSegments(line int) []lineSegment {
 			{"d", " delete"},
 			{"Esc/q", " cancel/quit"},
 		},
+	}
+	if model.mode == editMode {
+		shortcuts[0][2][1] = " save"
 	}
 	if line < 0 || line >= len(shortcuts) {
 		return nil

@@ -81,7 +81,7 @@ func newTerminalStyles(dark bool) terminalStyles {
 		inputLabel:     color("0", "8").Background(contextBackground),
 		inputPath:      color("4", "14").Background(contextBackground).Bold(true),
 		inputText:      color("0", "15").Background(inputBackground),
-		inputCursor:    color("0", "11").Background(inputBackground).Bold(true),
+		inputCursor:    color("3", "11").Bold(true),
 		inputError:     color("1", "9").Background(contextBackground).Bold(true),
 		contextArea:    contextArea,
 		inputArea:      inputArea,

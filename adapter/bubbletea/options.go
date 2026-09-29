@@ -6,6 +6,7 @@ type ModelOption func(*modelOptions)
 type modelOptions struct {
 	expandAliases bool
 	colors        bool
+	inlineEditing bool
 }
 
 // WithAliasExpansion displays the read-only contents of aliases that point to
@@ -21,5 +22,13 @@ func WithAliasExpansion(enabled bool) ModelOption {
 func WithColors(enabled bool) ModelOption {
 	return func(options *modelOptions) {
 		options.colors = enabled
+	}
+}
+
+// WithInlineEditing shows the active scalar editor in its tree row instead of
+// the dedicated input area. The default is false.
+func WithInlineEditing(enabled bool) ModelOption {
+	return func(options *modelOptions) {
+		options.inlineEditing = enabled
 	}
 }

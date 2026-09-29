@@ -17,7 +17,7 @@ and Bubble Tea adapter stay in separate packages.
 Run the editor from a checkout:
 
 ```sh
-go run ./cmd/structivedit [--expand-aliases] [--no-color] config.yaml
+go run ./cmd/structivedit [--expand-aliases] [--no-color] [--inline-edit] config.yaml
 ```
 
 The CLI opens one existing file. It writes only after Ctrl+S. Press `q` or
@@ -25,6 +25,9 @@ Escape to leave the editor; if the document is dirty, choose discard or return
 to editing. Ctrl+S errors stay visible in the editor and do not clear dirty
 state. `--expand-aliases` displays alias targets as read-only rows. `--no-color`
 disables colors; the `NO_COLOR` environment variable does the same.
+`--inline-edit` edits scalar values directly in their tree rows instead of in
+the dedicated input area. Press Enter to apply an inline edit or Escape to
+cancel it.
 
 Keyboard controls:
 
@@ -79,7 +82,11 @@ func edit(path string) error {
 	}
 	editor.MarkClean()
 
-	model := bubbletea.NewModel(editor, bubbletea.WithAliasExpansion(true))
+	model := bubbletea.NewModel(
+		editor,
+		bubbletea.WithAliasExpansion(true),
+		bubbletea.WithInlineEditing(true),
+	)
 	model.SetSaveHandler(func() error {
 		var output bytes.Buffer
 		if err := session.Encode(&output, editor.Document()); err != nil {
