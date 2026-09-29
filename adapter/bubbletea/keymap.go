@@ -10,7 +10,7 @@ import (
 
 func (model *Model) handleKey(key tea.Key) (tea.Model, tea.Cmd) {
 	model.lastClick = mouseClickState{}
-	model.message = ""
+	model.clearMessage()
 	switch model.mode {
 	case editMode:
 		model.handleEditKey(key)
@@ -27,6 +27,10 @@ func (model *Model) handleKey(key tea.Key) (tea.Model, tea.Cmd) {
 }
 
 func (model *Model) handleBrowseKey(key tea.Key) (tea.Model, tea.Cmd) {
+	if (key.Text == "?" || key.Code == '?') && !key.Mod.Contains(tea.ModCtrl) && !key.Mod.Contains(tea.ModAlt) {
+		model.showAllShortcuts = !model.showAllShortcuts
+		return model, nil
+	}
 	if key.Mod.Contains(tea.ModCtrl) {
 		switch key.Code {
 		case 'c', 'q':
@@ -63,8 +67,6 @@ func (model *Model) handleBrowseKey(key tea.Key) (tea.Model, tea.Cmd) {
 		model.expandOrFocusChild()
 	case tea.KeyEnter:
 		model.enterFocused()
-	case tea.KeyEscape:
-		return model, tea.Quit
 	case tea.KeyPgUp:
 		model.scroll(-model.visibleRowCount())
 	case tea.KeyPgDown:
@@ -100,7 +102,7 @@ func (model *Model) toggleCursorMode() {
 func (model *Model) handleEditKey(key tea.Key) {
 	if key.Code == tea.KeyEscape {
 		model.mode = browseMode
-		model.message = "Edit cancelled"
+		model.setMessage("Edit cancelled")
 		return
 	}
 	if key.Code == tea.KeyEnter {
@@ -118,7 +120,7 @@ func (model *Model) handleEditKey(key tea.Key) {
 		}
 		value, err := parseScalarInput(current, model.edit.value.String())
 		if err != nil {
-			model.message = err.Error()
+			model.setErrorMessage(err.Error())
 			return
 		}
 		model.mode = browseMode
@@ -136,7 +138,7 @@ func (model *Model) handleAddFieldKey(key tea.Key) {
 	if key.Code == tea.KeyEnter {
 		field := model.add.field.String()
 		if field == "" {
-			model.message = "Enter a field name"
+			model.setErrorMessage("Enter a field name")
 			return
 		}
 		plan, err := model.editor.PrepareAdd(model.add.parent, structivedit.AddTarget{
@@ -144,7 +146,7 @@ func (model *Model) handleAddFieldKey(key tea.Key) {
 			Field: field,
 		})
 		if err != nil {
-			model.message = err.Error()
+			model.setErrorMessage(err.Error())
 			return
 		}
 		model.beginAddPlan(plan)
@@ -160,7 +162,7 @@ func (model *Model) handleAddValueKey(key tea.Key) {
 	}
 	if key.Code == tea.KeyTab {
 		if err := model.storeAddInput(); err != nil {
-			model.message = err.Error()
+			model.setErrorMessage(err.Error())
 			return
 		}
 		delta := 1
@@ -173,7 +175,7 @@ func (model *Model) handleAddValueKey(key tea.Key) {
 	}
 	if key.Code == tea.KeyEnter {
 		if err := model.storeAddInput(); err != nil {
-			model.message = err.Error()
+			model.setErrorMessage(err.Error())
 			return
 		}
 		if model.add.inputAt+1 < len(model.add.plan.Inputs) {
@@ -191,13 +193,13 @@ func (model *Model) handleDeleteKey(key tea.Key) {
 	switch key.Code {
 	case tea.KeyEscape:
 		model.mode = browseMode
-		model.message = "Delete cancelled"
+		model.setMessage("Delete cancelled")
 	case tea.KeyTab:
 		model.delete.confirm = !model.delete.confirm
 	case tea.KeyEnter:
 		if !model.delete.confirm {
 			model.mode = browseMode
-			model.message = "Delete cancelled"
+			model.setMessage("Delete cancelled")
 			return
 		}
 		id := model.delete.nodeID
@@ -207,7 +209,7 @@ func (model *Model) handleDeleteKey(key tea.Key) {
 			model.fail(err)
 			return
 		}
-		model.message = "Node deleted"
+		model.setMessage("Node deleted")
 		model.afterApply(result)
 	}
 }
@@ -310,8 +312,9 @@ func (model *Model) enterFocused() {
 		kind, value, scalar := model.editor.Document().Scalar(id)
 		if scalar {
 			model.edit = editBuffer{nodeID: id, value: newTextInput(scalarText(kind, value))}
+			model.showAllShortcuts = false
 			model.mode = editMode
-			model.message = ""
+			model.clearMessage()
 		}
 	}
 }
@@ -328,7 +331,7 @@ func (model *Model) toggleFocused() {
 	if _, isBool := value.(bool); !isBool {
 		return
 	}
-	model.message = ""
+	model.clearMessage()
 	model.apply(structivedit.Toggle{NodeID: id})
 }
 
@@ -339,7 +342,7 @@ func (model *Model) startAdd() {
 	}
 	view, err := model.editor.View(parent)
 	if err != nil || !view.Capabilities.Addable {
-		model.message = "This node cannot accept an item"
+		model.setErrorMessage("This node cannot accept an item")
 		return
 	}
 	model.add = addPrompt{parent: parent, values: make(map[structivedit.InputID]any)}
@@ -352,13 +355,15 @@ func (model *Model) startAdd() {
 		}
 		model.beginAddPlan(plan)
 	case document.NodeMapping:
+		model.showAllShortcuts = false
 		model.mode = addFieldMode
 	default:
-		model.message = "Only sequences and mappings accept items"
+		model.setErrorMessage("Only sequences and mappings accept items")
 	}
 }
 
 func (model *Model) beginAddPlan(plan structivedit.AddPlan) {
+	model.showAllShortcuts = false
 	model.add.plan = plan
 	model.add.values = make(map[structivedit.InputID]any)
 	if len(plan.Inputs) == 0 {
@@ -412,7 +417,7 @@ func (model *Model) commitAdd() {
 		model.fail(err)
 		return
 	}
-	model.message = "Node added"
+	model.setMessage("Node added")
 	model.afterApply(result)
 	for _, event := range result.Events {
 		if event.Kind == structivedit.EventNodeAdded {
@@ -425,16 +430,17 @@ func (model *Model) commitAdd() {
 func (model *Model) cancelAdd() {
 	model.mode = browseMode
 	model.add = addPrompt{}
-	model.message = "Add cancelled"
+	model.setMessage("Add cancelled")
 }
 
 func (model *Model) startDelete() {
 	id, ok := model.editor.Focused()
 	if !ok || !model.editor.CanDelete(id) {
-		model.message = "This node cannot be deleted"
+		model.setErrorMessage("This node cannot be deleted")
 		return
 	}
 	model.delete = deletePrompt{nodeID: id}
+	model.showAllShortcuts = false
 	model.mode = deleteConfirmMode
 }
 
@@ -485,25 +491,25 @@ func (model *Model) afterApply(result structivedit.ApplyResult) {
 
 func (model *Model) save() {
 	if model.saveHandler == nil {
-		model.message = "Save is handled by the calling application"
+		model.setMessage("Save is handled by the calling application")
 		return
 	}
 	if err := model.saveHandler(); err != nil {
 		model.fail(err)
 		return
 	}
-	model.message = "Saved"
+	model.setMessage("Saved")
 }
 
 func (model *Model) fail(err error) {
 	if err == nil {
 		return
 	}
-	model.message = err.Error()
+	model.setErrorMessage(err.Error())
 }
 
 func (model *Model) visibleRowCount() int {
-	count := model.height - 4 - model.inputAreaLineCount()
+	count := model.height - 3 - model.inputAreaLineCount() - model.keyboardHelpLineCount()
 	if count < 1 {
 		return 1
 	}
@@ -519,8 +525,10 @@ func (model *Model) inputAreaLineCount() int {
 		return 2
 	case addFieldMode, addValueMode:
 		return 2
-	default:
+	case deleteConfirmMode:
 		return 1
+	default:
+		return 0
 	}
 }
 

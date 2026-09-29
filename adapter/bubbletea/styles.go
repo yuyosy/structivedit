@@ -37,7 +37,6 @@ type terminalStyles struct {
 	inputPath      lipgloss.Style
 	inputText      lipgloss.Style
 	inputCursor    lipgloss.Style
-	inputError     lipgloss.Style
 	contextArea    lipgloss.Style
 	inputArea      lipgloss.Style
 }
@@ -82,7 +81,6 @@ func newTerminalStyles(dark bool) terminalStyles {
 		inputPath:      color("4", "14").Background(contextBackground).Bold(true),
 		inputText:      color("0", "15").Background(inputBackground),
 		inputCursor:    color("3", "11").Bold(true),
-		inputError:     color("1", "9").Background(contextBackground).Bold(true),
 		contextArea:    contextArea,
 		inputArea:      inputArea,
 	}

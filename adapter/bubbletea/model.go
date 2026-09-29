@@ -78,9 +78,11 @@ type Model struct {
 	width            int
 	height           int
 	message          string
+	messageError     bool
 	saveHandler      func() error
 	hitRegions       []hitRegion
 	lastClick        mouseClickState
+	showAllShortcuts bool
 	expandAliases    bool
 	colorsEnabled    bool
 	inlineEditing    bool
@@ -125,6 +127,21 @@ func (model *Model) Editor() *structivedit.Editor {
 	return model.editor
 }
 
+func (model *Model) setMessage(message string) {
+	model.message = message
+	model.messageError = false
+}
+
+func (model *Model) setErrorMessage(message string) {
+	model.message = message
+	model.messageError = true
+}
+
+func (model *Model) clearMessage() {
+	model.message = ""
+	model.messageError = false
+}
+
 // SetSaveHandler registers the caller's persistence function for Ctrl+S.
 // The handler should call Editor.MarkClean only after encoding and writing
 // have both succeeded.
@@ -150,11 +167,11 @@ func (model *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	if model.editor == nil {
 		if pressed, ok := message.(tea.KeyPressMsg); ok {
 			key := pressed.Key()
-			if key.Code == tea.KeyEscape || key.Text == "q" || key.Mod.Contains(tea.ModCtrl) && key.Code == 'c' {
+			if key.Text == "q" || key.Mod.Contains(tea.ModCtrl) && key.Code == 'c' {
 				return model, tea.Quit
 			}
 		}
-		model.message = "Editor unavailable"
+		model.setMessage("Editor unavailable")
 		return model, nil
 	}
 	switch typed := message.(type) {

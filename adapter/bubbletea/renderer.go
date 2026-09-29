@@ -242,11 +242,9 @@ func (model *Model) render() tea.View {
 	if end > len(rows) {
 		end = len(rows)
 	}
-	width := model.width
-	if width < 20 {
-		width = 20
-	}
-	lines := make([]string, 0, end-start+4+model.inputAreaLineCount())
+	width := model.layoutWidth()
+	helpLines := model.keyboardHelpLines(width)
+	lines := make([]string, 0, end-start+3+model.inputAreaLineCount()+len(helpLines))
 	issueCount := len(model.editor.Issues())
 	state := "Saved"
 	stateStyle := model.styles.saved
@@ -266,10 +264,25 @@ func (model *Model) render() tea.View {
 	lines = append(lines, model.renderStyledLine(width,
 		lineSegment{text: "StructiveEdit", style: model.styles.header},
 		lineSegment{text: " | ", style: model.styles.plain},
-		lineSegment{text: state, style: stateStyle},
-		lineSegment{text: fmt.Sprintf(" | Cursor: %s | %d visible rows | ", cursorModeText, len(rows)), style: model.styles.muted},
-		lineSegment{text: issueCountText, style: issueCountStyle},
+		lineSegment{text: fmt.Sprintf("Cursor: %s | %d visible rows", cursorModeText, len(rows)), style: model.styles.muted},
 	))
+	statusSegments := make([]lineSegment, 0, 8)
+	if model.message != "" {
+		messageStyle := model.styles.info
+		if model.messageError {
+			messageStyle = model.styles.error
+		}
+		statusSegments = append(statusSegments,
+			lineSegment{text: model.message, style: messageStyle},
+			lineSegment{text: " | ", style: model.styles.muted},
+		)
+	}
+	statusSegments = append(statusSegments,
+		lineSegment{text: state, style: stateStyle},
+		lineSegment{text: " | ", style: model.styles.muted},
+		lineSegment{text: issueCountText, style: issueCountStyle},
+	)
+	lines = append(lines, model.renderStyledLine(width, statusSegments...))
 	lines = append(lines, model.renderStyledLine(width,
 		lineSegment{text: strings.Repeat("─", width), style: model.styles.muted},
 	))
@@ -340,14 +353,15 @@ func (model *Model) render() tea.View {
 			model.hitRegions = append(model.hitRegions, hitRegion{line: len(lines) - 1, nodeID: row.nodeID})
 		}
 	}
-	for len(lines)-2 < count {
+	for len(lines)-3 < count {
 		lines = append(lines, "")
 	}
 	for _, inputLine := range model.inputAreaLines(width) {
 		lines = append(lines, model.renderStyledLine(width, inputLine...))
 	}
-	lines = append(lines, model.renderStyledLine(width, model.keyboardHelpSegments(0)...))
-	lines = append(lines, model.renderStyledLine(width, model.keyboardHelpSegments(1)...))
+	for _, helpLine := range helpLines {
+		lines = append(lines, model.renderStyledLine(width, helpLine...))
+	}
 	view := tea.NewView(strings.Join(lines, "\n"))
 	view.AltScreen = true
 	view.MouseMode = tea.MouseModeCellMotion
@@ -366,9 +380,6 @@ func (model *Model) inputAreaLines(width int) [][]lineSegment {
 			{text: model.editPath(), style: model.styles.inputPath},
 		}
 		if model.inlineEditing {
-			if model.message != "" {
-				context = append(context, lineSegment{text: "  " + model.message, style: model.styles.inputError})
-			}
 			return [][]lineSegment{model.fullWidthLine(width, append([]lineSegment{{text: " ", style: model.styles.contextArea}}, context...), model.styles.contextArea)}
 		}
 		return model.inputPromptLines(width, context, model.edit.value)
@@ -399,25 +410,13 @@ func (model *Model) inputAreaLines(width int) [][]lineSegment {
 			{text: model.currentDeletePath(), style: model.styles.inputPath},
 			{text: "?  " + choice + "  (Tab changes, Enter selects, Esc cancels)", style: model.styles.inputLabel},
 		}
-		if model.message != "" {
-			segments = append(segments, lineSegment{text: "  " + model.message, style: model.styles.inputError})
-		}
 		return [][]lineSegment{model.fullWidthLine(width, segments, model.styles.contextArea)}
 	default:
-		if model.message == "" {
-			return [][]lineSegment{nil}
-		}
-		return [][]lineSegment{model.fullWidthLine(width,
-			[]lineSegment{{text: " " + model.message, style: model.styles.inputLabel}},
-			model.styles.contextArea,
-		)}
+		return nil
 	}
 }
 
 func (model *Model) inputPromptLines(width int, context []lineSegment, input textInput) [][]lineSegment {
-	if model.message != "" {
-		context = append(context, lineSegment{text: "  " + model.message, style: model.styles.inputError})
-	}
 	context = append([]lineSegment{{text: " ", style: model.styles.contextArea}}, context...)
 	contextLine := model.fullWidthLine(width, context, model.styles.contextArea)
 	inputLine := model.inputValueLine(width, input)
@@ -667,8 +666,19 @@ func isPathIdentifier(value string) bool {
 	return true
 }
 
-func (model *Model) keyboardHelpSegments(line int) []lineSegment {
-	shortcuts := [][][2]string{
+func (model *Model) layoutWidth() int {
+	if model.width < 6 {
+		return 6
+	}
+	return model.width
+}
+
+func (model *Model) keyboardHelpLineCount() int {
+	return len(model.keyboardHelpLines(model.layoutWidth()))
+}
+
+func (model *Model) keyboardHelpLines(width int) [][]lineSegment {
+	groups := [][][2]string{
 		{
 			{"↑/↓", " move"},
 			{"←/→", " fold"},
@@ -683,24 +693,195 @@ func (model *Model) keyboardHelpSegments(line int) []lineSegment {
 			{"Ctrl+S", " save"},
 			{"a", " add"},
 			{"d", " delete"},
-			{"Esc/q", " cancel/quit"},
+			{"q", " quit"},
 		},
 	}
 	if model.mode == editMode {
-		shortcuts[0][2][1] = " save"
+		groups[0][2][1] = " save"
 	}
-	if line < 0 || line >= len(shortcuts) {
+	if model.mode != browseMode {
+		groups[1][5] = [2]string{"Esc", " cancel"}
+	}
+	shortcuts := make([][2]string, 0, 12)
+	for _, group := range groups {
+		shortcuts = append(shortcuts, group...)
+	}
+	if model.mode == browseMode && model.showAllShortcuts {
+		return model.expandedShortcutLines(width, shortcuts)
+	}
+	return [][]lineSegment{model.compactShortcutLine(width, shortcuts, model.mode == browseMode)}
+}
+
+func (model *Model) compactShortcutLine(width int, shortcuts [][2]string, showMore bool) []lineSegment {
+	if width <= 0 {
 		return nil
 	}
-	segments := make([]lineSegment, 0, len(shortcuts[line])*3)
-	for index, shortcut := range shortcuts[line] {
+	shown := 0
+	used := 0
+	for shown < len(shortcuts) {
+		separator := 0
+		if shown > 0 {
+			separator = 2
+		}
+		candidate := used + separator + shortcutItemWidth(shortcuts[shown])
+		if candidate <= width {
+			candidateWithMore := candidate
+			if showMore {
+				candidateWithMore += 7
+				if shown+1 < len(shortcuts) {
+					candidateWithMore++
+				}
+			}
+			if candidateWithMore > width {
+				break
+			}
+			used = candidate
+			shown++
+			continue
+		}
+		break
+	}
+	truncated := shown < len(shortcuts)
+	ellipsisWidth := func() int {
+		width := 1
+		if showMore {
+			width += 7
+		}
+		return width
+	}
+	if truncated {
+		for shown > 0 {
+			if used+ellipsisWidth() <= width {
+				break
+			}
+			shown--
+			used = shortcutListWidth(shortcuts, shown)
+		}
+	}
+
+	segments := make([]lineSegment, 0, shown*3+4)
+	for index := 0; index < shown; index++ {
 		if index > 0 {
 			segments = append(segments, lineSegment{text: "  ", style: model.styles.muted})
 		}
-		segments = append(segments,
-			lineSegment{text: shortcut[0], style: model.styles.shortcutKey},
-			lineSegment{text: shortcut[1], style: model.styles.muted},
-		)
+		segments = appendShortcutSegments(segments, shortcuts[index], model.styles.shortcutKey, model.styles.muted)
+	}
+	if truncated && used+ellipsisWidth() <= width {
+		segments = append(segments, lineSegment{text: "…", style: model.styles.muted})
+	}
+	if showMore {
+		if len(segments) > 0 {
+			segments = append(segments, lineSegment{text: " ", style: model.styles.muted})
+		}
+		segments = appendShortcutSegments(segments, [2]string{"?", " more"}, model.styles.shortcutKey, model.styles.muted)
 	}
 	return segments
+}
+
+func (model *Model) expandedShortcutLines(width int, shortcuts [][2]string) [][]lineSegment {
+	lines := make([][]lineSegment, 0, len(shortcuts))
+	current := make([]lineSegment, 0, 6)
+	currentWidth := 0
+	for _, shortcut := range shortcuts {
+		itemWidth := shortcutItemWidth(shortcut)
+		itemSegments := []lineSegment{
+			{text: shortcut[0], style: model.styles.shortcutKey},
+			{text: shortcut[1], style: model.styles.muted},
+		}
+		if itemWidth > width {
+			if len(current) > 0 {
+				lines = append(lines, current)
+				current = nil
+				currentWidth = 0
+			}
+			lines = append(lines, wrapShortcutSegments(itemSegments, width)...)
+			continue
+		}
+		separator := 0
+		if currentWidth > 0 {
+			separator = 2
+		}
+		if currentWidth > 0 && currentWidth+separator+itemWidth > width {
+			lines = append(lines, current)
+			current = make([]lineSegment, 0, 6)
+			currentWidth = 0
+			separator = 0
+		}
+		if separator > 0 {
+			current = append(current, lineSegment{text: "  ", style: model.styles.muted})
+		}
+		current = appendShortcutSegments(current, shortcut, model.styles.shortcutKey, model.styles.muted)
+		currentWidth += separator + itemWidth
+	}
+	if len(current) > 0 {
+		lines = append(lines, current)
+	}
+	if len(lines) == 0 {
+		lines = append(lines, nil)
+	}
+	less := [2]string{"?", " less"}
+	last := len(lines) - 1
+	if lineSegmentWidth(lines[last])+8 <= width {
+		lines[last] = append(lines[last],
+			lineSegment{text: "  ", style: model.styles.muted},
+			lineSegment{text: less[0], style: model.styles.shortcutKey},
+			lineSegment{text: less[1], style: model.styles.muted},
+		)
+	} else {
+		lines = append(lines, []lineSegment{
+			{text: less[0], style: model.styles.shortcutKey},
+			{text: less[1], style: model.styles.muted},
+		})
+	}
+	return lines
+}
+
+func wrapShortcutSegments(segments []lineSegment, width int) [][]lineSegment {
+	lines := make([][]lineSegment, 0, len(segments))
+	current := make([]lineSegment, 0, len(segments))
+	currentWidth := 0
+	for _, segment := range segments {
+		runes := []rune(segment.text)
+		for len(runes) > 0 {
+			if currentWidth == width {
+				lines = append(lines, current)
+				current = make([]lineSegment, 0, len(segments))
+				currentWidth = 0
+			}
+			remaining := width - currentWidth
+			count := len(runes)
+			if count > remaining {
+				count = remaining
+			}
+			current = append(current, lineSegment{text: string(runes[:count]), style: segment.style})
+			currentWidth += count
+			runes = runes[count:]
+		}
+	}
+	if len(current) > 0 {
+		lines = append(lines, current)
+	}
+	return lines
+}
+
+func appendShortcutSegments(segments []lineSegment, shortcut [2]string, keyStyle, labelStyle lipgloss.Style) []lineSegment {
+	return append(segments,
+		lineSegment{text: shortcut[0], style: keyStyle},
+		lineSegment{text: shortcut[1], style: labelStyle},
+	)
+}
+
+func shortcutItemWidth(shortcut [2]string) int {
+	return len([]rune(shortcut[0])) + len([]rune(shortcut[1]))
+}
+
+func shortcutListWidth(shortcuts [][2]string, count int) int {
+	width := 0
+	for index := 0; index < count; index++ {
+		if index > 0 {
+			width += 2
+		}
+		width += shortcutItemWidth(shortcuts[index])
+	}
+	return width
 }
