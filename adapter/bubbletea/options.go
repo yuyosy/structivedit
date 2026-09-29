@@ -4,9 +4,10 @@ package bubbletea
 type ModelOption func(*modelOptions)
 
 type modelOptions struct {
-	expandAliases bool
-	colors        bool
-	inlineEditing bool
+	expandAliases    bool
+	colors           bool
+	inlineEditing    bool
+	mouseDoubleClick bool
 }
 
 // WithAliasExpansion displays the read-only contents of aliases that point to
@@ -30,5 +31,13 @@ func WithColors(enabled bool) ModelOption {
 func WithInlineEditing(enabled bool) ModelOption {
 	return func(options *modelOptions) {
 		options.inlineEditing = enabled
+	}
+}
+
+// WithMouseDoubleClick enables editing scalar values by double-clicking their
+// rows. Bool values are toggled instead. The default is true.
+func WithMouseDoubleClick(enabled bool) ModelOption {
+	return func(options *modelOptions) {
+		options.mouseDoubleClick = enabled
 	}
 }

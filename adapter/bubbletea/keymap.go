@@ -9,6 +9,7 @@ import (
 )
 
 func (model *Model) handleKey(key tea.Key) (tea.Model, tea.Cmd) {
+	model.lastClick = mouseClickState{}
 	model.message = ""
 	switch model.mode {
 	case editMode:
@@ -310,6 +311,7 @@ func (model *Model) enterFocused() {
 		if scalar {
 			model.edit = editBuffer{nodeID: id, value: newTextInput(scalarText(kind, value))}
 			model.mode = editMode
+			model.message = ""
 		}
 	}
 }
@@ -326,6 +328,7 @@ func (model *Model) toggleFocused() {
 	if _, isBool := value.(bool); !isBool {
 		return
 	}
+	model.message = ""
 	model.apply(structivedit.Toggle{NodeID: id})
 }
 

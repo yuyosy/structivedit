@@ -67,43 +67,46 @@ type hitRegion struct {
 // File I/O stays with the caller; SetSaveHandler connects an explicit save key
 // to the caller's persistence logic.
 type Model struct {
-	editor        *structivedit.Editor
-	mode          mode
-	cursorMode    cursorMode
-	expanded      map[document.NodeID]bool
-	edit          editBuffer
-	add           addPrompt
-	delete        deletePrompt
-	viewport      viewport
-	width         int
-	height        int
-	message       string
-	saveHandler   func() error
-	hitRegions    []hitRegion
-	expandAliases bool
-	colorsEnabled bool
-	inlineEditing bool
-	styles        terminalStyles
+	editor           *structivedit.Editor
+	mode             mode
+	cursorMode       cursorMode
+	expanded         map[document.NodeID]bool
+	edit             editBuffer
+	add              addPrompt
+	delete           deletePrompt
+	viewport         viewport
+	width            int
+	height           int
+	message          string
+	saveHandler      func() error
+	hitRegions       []hitRegion
+	lastClick        mouseClickState
+	expandAliases    bool
+	colorsEnabled    bool
+	inlineEditing    bool
+	mouseDoubleClick bool
+	styles           terminalStyles
 }
 
 // NewModel creates a terminal model for editor. Containers at the root and
 // one level below it start expanded; deeper content can be opened as needed.
 func NewModel(editor *structivedit.Editor, options ...ModelOption) *Model {
-	settings := modelOptions{colors: true}
+	settings := modelOptions{colors: true, mouseDoubleClick: true}
 	for _, option := range options {
 		if option != nil {
 			option(&settings)
 		}
 	}
 	model := &Model{
-		editor:        editor,
-		expanded:      make(map[document.NodeID]bool),
-		width:         100,
-		height:        24,
-		expandAliases: settings.expandAliases,
-		colorsEnabled: settings.colors,
-		inlineEditing: settings.inlineEditing,
-		styles:        newTerminalStyles(true),
+		editor:           editor,
+		expanded:         make(map[document.NodeID]bool),
+		width:            100,
+		height:           24,
+		expandAliases:    settings.expandAliases,
+		colorsEnabled:    settings.colors,
+		inlineEditing:    settings.inlineEditing,
+		mouseDoubleClick: settings.mouseDoubleClick,
+		styles:           newTerminalStyles(true),
 	}
 	if editor != nil && editor.Document() != nil {
 		root := editor.Document().Root()
