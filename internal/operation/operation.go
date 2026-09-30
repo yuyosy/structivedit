@@ -41,17 +41,28 @@ func NewSnapshotOperation(before, after *document.Document, affected []document.
 	if before == nil || after == nil || !before.SameLineage(after) {
 		return nil, ErrInvalidOperation
 	}
+	changedIDs := append([]document.NodeID(nil), affected...)
+	for _, effect := range effects {
+		if effect.NodeID != 0 {
+			changedIDs = append(changedIDs, effect.NodeID)
+		}
+		if effect.ParentID != 0 {
+			changedIDs = append(changedIDs, effect.ParentID)
+		}
+	}
+	patch, err := document.NewSnapshotPatchForNodes(before, after, changedIDs)
+	if err != nil {
+		return nil, ErrInvalidOperation
+	}
 	return &snapshotOperation{
-		before:   before,
-		after:    after,
+		patch:    patch,
 		affected: append([]document.NodeID(nil), affected...),
 		effects:  append([]Effect(nil), effects...),
 	}, nil
 }
 
 type snapshotOperation struct {
-	before   *document.Document
-	after    *document.Document
+	patch    *document.SnapshotPatch
 	affected []document.NodeID
 	effects  []Effect
 }
@@ -60,14 +71,14 @@ func (operation *snapshotOperation) Apply(builder *document.Builder) error {
 	if operation == nil || builder == nil {
 		return ErrInvalidOperation
 	}
-	return builder.RestoreContentFrom(operation.after)
+	return operation.patch.Apply(builder, false)
 }
 
 func (operation *snapshotOperation) Undo(builder *document.Builder) error {
 	if operation == nil || builder == nil {
 		return ErrInvalidOperation
 	}
-	return builder.RestoreContentFrom(operation.before)
+	return operation.patch.Apply(builder, true)
 }
 
 func (operation *snapshotOperation) AffectedNodeIDs() []document.NodeID {

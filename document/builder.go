@@ -30,22 +30,18 @@ func NewBuilder() *Builder {
 	}
 }
 
-// NewBuilderFrom copies doc into an independent draft while preserving its
-// NodeIDs, next ID, revision, and lineage.
+// NewBuilderFrom copies a built immutable document into an independent draft
+// while preserving its NodeIDs, indexes, next ID, revision, and lineage.
 func NewBuilderFrom(doc *Document) (*Builder, error) {
 	if doc == nil || doc.lineage == 0 {
 		return nil, ErrInvalidDocument
-	}
-	parents, refs, err := validateSnapshot(doc)
-	if err != nil {
-		return nil, err
 	}
 	return &Builder{
 		draft: &documentDraft{
 			root:     doc.root,
 			nodes:    cloneNodeMap(doc.nodes),
-			parents:  parents,
-			refs:     refs,
+			parents:  cloneParents(doc.parents),
+			refs:     cloneReferences(doc.refs),
 			nextID:   doc.nextID,
 			lineage:  doc.lineage,
 			reserved: make(map[NodeID]struct{}),
@@ -67,9 +63,8 @@ func (b *Builder) NewScalar(value any) (NodeID, error) {
 	if err != nil {
 		return 0, err
 	}
-	nodes := cloneNodeMap(b.draft.nodes)
-	nodes[id] = &docNode{id: id, kind: NodeScalar, scalar: scalar}
-	if err := b.commit(b.draft.root, nodes, cloneReserved(b.draft.reserved), next, true); err != nil {
+	b.draft.nodes[id] = &docNode{id: id, kind: NodeScalar, scalar: scalar}
+	if err := b.commitPrepared(b.draft.root, b.draft.nodes, b.draft.reserved, next, b.draft.parents, b.draft.refs, true); err != nil {
 		return 0, err
 	}
 	return id, nil
@@ -87,9 +82,11 @@ func (b *Builder) NewSequence(items []NodeID) (NodeID, error) {
 	if err := b.validateNewChildren(id, items); err != nil {
 		return 0, err
 	}
-	nodes := cloneNodeMap(b.draft.nodes)
-	nodes[id] = &docNode{id: id, kind: NodeSequence, sequence: &sequenceNode{items: append([]NodeID(nil), items...)}}
-	if err := b.commit(b.draft.root, nodes, cloneReserved(b.draft.reserved), next, true); err != nil {
+	b.draft.nodes[id] = &docNode{id: id, kind: NodeSequence, sequence: &sequenceNode{items: append([]NodeID(nil), items...)}}
+	for index, child := range items {
+		b.draft.parents[child] = ParentRef{Parent: id, Role: ParentSequenceItem, Index: index}
+	}
+	if err := b.commitPrepared(b.draft.root, b.draft.nodes, b.draft.reserved, next, b.draft.parents, b.draft.refs, true); err != nil {
 		return 0, err
 	}
 	return id, nil
@@ -108,9 +105,12 @@ func (b *Builder) NewMapping(entries []MappingEntry) (NodeID, error) {
 	if err := b.validateNewChildren(id, children); err != nil {
 		return 0, err
 	}
-	nodes := cloneNodeMap(b.draft.nodes)
-	nodes[id] = &docNode{id: id, kind: NodeMapping, mapping: &mappingNode{entries: cloneMappingEntries(entries)}}
-	if err := b.commit(b.draft.root, nodes, cloneReserved(b.draft.reserved), next, true); err != nil {
+	b.draft.nodes[id] = &docNode{id: id, kind: NodeMapping, mapping: &mappingNode{entries: cloneMappingEntries(entries)}}
+	for index, entry := range entries {
+		b.draft.parents[entry.Key] = ParentRef{Parent: id, Role: ParentMappingKey, Index: index}
+		b.draft.parents[entry.Value] = ParentRef{Parent: id, Role: ParentMappingValue, Index: index}
+	}
+	if err := b.commitPrepared(b.draft.root, b.draft.nodes, b.draft.reserved, next, b.draft.parents, b.draft.refs, true); err != nil {
 		return 0, err
 	}
 	return id, nil
@@ -128,9 +128,9 @@ func (b *Builder) NewReference(target NodeID) (NodeID, error) {
 	if err != nil {
 		return 0, err
 	}
-	nodes := cloneNodeMap(b.draft.nodes)
-	nodes[id] = &docNode{id: id, kind: NodeReference, reference: &referenceNode{target: target}}
-	if err := b.commit(b.draft.root, nodes, cloneReserved(b.draft.reserved), next, true); err != nil {
+	b.draft.nodes[id] = &docNode{id: id, kind: NodeReference, reference: &referenceNode{target: target}}
+	addReference(b.draft.refs, target, id)
+	if err := b.commitPrepared(b.draft.root, b.draft.nodes, b.draft.reserved, next, b.draft.parents, b.draft.refs, true); err != nil {
 		return 0, err
 	}
 	return id, nil
@@ -147,9 +147,8 @@ func (b *Builder) Reserve() (NodeID, error) {
 	if err != nil {
 		return 0, err
 	}
-	reserved := cloneReserved(b.draft.reserved)
-	reserved[id] = struct{}{}
-	if err := b.commit(b.draft.root, cloneNodeMap(b.draft.nodes), reserved, next, false); err != nil {
+	b.draft.reserved[id] = struct{}{}
+	if err := b.commitPrepared(b.draft.root, b.draft.nodes, b.draft.reserved, next, b.draft.parents, b.draft.refs, false); err != nil {
 		return 0, err
 	}
 	return id, nil
@@ -167,11 +166,9 @@ func (b *Builder) DefineScalar(id NodeID, value any) error {
 	if err != nil {
 		return err
 	}
-	nodes := cloneNodeMap(b.draft.nodes)
-	nodes[id] = &docNode{id: id, kind: NodeScalar, scalar: scalar}
-	reserved := cloneReserved(b.draft.reserved)
-	delete(reserved, id)
-	return b.commit(b.draft.root, nodes, reserved, b.draft.nextID, true)
+	b.draft.nodes[id] = &docNode{id: id, kind: NodeScalar, scalar: scalar}
+	delete(b.draft.reserved, id)
+	return b.commitPrepared(b.draft.root, b.draft.nodes, b.draft.reserved, b.draft.nextID, b.draft.parents, b.draft.refs, true)
 }
 
 // DefineSequence defines a reserved ID as a sequence.
@@ -182,14 +179,15 @@ func (b *Builder) DefineSequence(id NodeID, items []NodeID) error {
 	if err := b.requireReservation(id); err != nil {
 		return err
 	}
-	if err := b.validateNewChildren(id, items); err != nil {
+	if err := b.validateDefinitionChildren(id, items); err != nil {
 		return err
 	}
-	nodes := cloneNodeMap(b.draft.nodes)
-	nodes[id] = &docNode{id: id, kind: NodeSequence, sequence: &sequenceNode{items: append([]NodeID(nil), items...)}}
-	reserved := cloneReserved(b.draft.reserved)
-	delete(reserved, id)
-	return b.commit(b.draft.root, nodes, reserved, b.draft.nextID, true)
+	b.draft.nodes[id] = &docNode{id: id, kind: NodeSequence, sequence: &sequenceNode{items: append([]NodeID(nil), items...)}}
+	for index, child := range items {
+		b.draft.parents[child] = ParentRef{Parent: id, Role: ParentSequenceItem, Index: index}
+	}
+	delete(b.draft.reserved, id)
+	return b.commitPrepared(b.draft.root, b.draft.nodes, b.draft.reserved, b.draft.nextID, b.draft.parents, b.draft.refs, true)
 }
 
 // DefineMapping defines a reserved ID as a mapping.
@@ -200,14 +198,16 @@ func (b *Builder) DefineMapping(id NodeID, entries []MappingEntry) error {
 	if err := b.requireReservation(id); err != nil {
 		return err
 	}
-	if err := b.validateNewChildren(id, mappingChildren(entries)); err != nil {
+	if err := b.validateDefinitionChildren(id, mappingChildren(entries)); err != nil {
 		return err
 	}
-	nodes := cloneNodeMap(b.draft.nodes)
-	nodes[id] = &docNode{id: id, kind: NodeMapping, mapping: &mappingNode{entries: cloneMappingEntries(entries)}}
-	reserved := cloneReserved(b.draft.reserved)
-	delete(reserved, id)
-	return b.commit(b.draft.root, nodes, reserved, b.draft.nextID, true)
+	b.draft.nodes[id] = &docNode{id: id, kind: NodeMapping, mapping: &mappingNode{entries: cloneMappingEntries(entries)}}
+	for index, entry := range entries {
+		b.draft.parents[entry.Key] = ParentRef{Parent: id, Role: ParentMappingKey, Index: index}
+		b.draft.parents[entry.Value] = ParentRef{Parent: id, Role: ParentMappingValue, Index: index}
+	}
+	delete(b.draft.reserved, id)
+	return b.commitPrepared(b.draft.root, b.draft.nodes, b.draft.reserved, b.draft.nextID, b.draft.parents, b.draft.refs, true)
 }
 
 // DefineReference defines a reserved ID as a reference. target may itself be
@@ -224,11 +224,10 @@ func (b *Builder) DefineReference(id, target NodeID) error {
 			return ErrNodeNotFound
 		}
 	}
-	nodes := cloneNodeMap(b.draft.nodes)
-	nodes[id] = &docNode{id: id, kind: NodeReference, reference: &referenceNode{target: target}}
-	reserved := cloneReserved(b.draft.reserved)
-	delete(reserved, id)
-	return b.commit(b.draft.root, nodes, reserved, b.draft.nextID, true)
+	b.draft.nodes[id] = &docNode{id: id, kind: NodeReference, reference: &referenceNode{target: target}}
+	addReference(b.draft.refs, target, id)
+	delete(b.draft.reserved, id)
+	return b.commitPrepared(b.draft.root, b.draft.nodes, b.draft.reserved, b.draft.nextID, b.draft.parents, b.draft.refs, true)
 }
 
 // SetRoot selects the single ownership root. The selected node must exist and
@@ -247,7 +246,7 @@ func (b *Builder) SetRoot(id NodeID) error {
 	if b.draft.root == id {
 		return nil
 	}
-	return b.commit(id, cloneNodeMap(b.draft.nodes), cloneReserved(b.draft.reserved), b.draft.nextID, true)
+	return b.commitPrepared(id, b.draft.nodes, b.draft.reserved, b.draft.nextID, b.draft.parents, b.draft.refs, true)
 }
 
 // SetScalar changes a scalar's value without changing its ScalarKind.
@@ -272,9 +271,8 @@ func (b *Builder) SetScalar(id NodeID, value any) error {
 	if equalScalar(entry.scalar, scalar) {
 		return nil
 	}
-	nodes := cloneNodeMap(b.draft.nodes)
-	nodes[id].scalar = scalar
-	return b.commit(b.draft.root, nodes, cloneReserved(b.draft.reserved), b.draft.nextID, true)
+	entry.scalar = scalar
+	return b.commitPrepared(b.draft.root, b.draft.nodes, b.draft.reserved, b.draft.nextID, b.draft.parents, b.draft.refs, true)
 }
 
 // SetSequenceItems replaces a sequence's ordered items. Ownership subtrees of
@@ -363,9 +361,8 @@ func (b *Builder) SetRestrictions(id NodeID, restrictions NodeRestrictions) erro
 	if entry.restrictions == restrictions {
 		return nil
 	}
-	nodes := cloneNodeMap(b.draft.nodes)
-	nodes[id].restrictions = restrictions
-	return b.commit(b.draft.root, nodes, cloneReserved(b.draft.reserved), b.draft.nextID, true)
+	entry.restrictions = restrictions
+	return b.commitPrepared(b.draft.root, b.draft.nodes, b.draft.reserved, b.draft.nextID, b.draft.parents, b.draft.refs, true)
 }
 
 // RestoreContentFrom restores the content of a snapshot from the same lineage.
@@ -386,7 +383,7 @@ func (b *Builder) RestoreContentFrom(doc *Document) error {
 	}
 	changed := !sameContent
 	nodes := cloneNodeMap(doc.nodes)
-	if err := b.commitWithIndexes(doc.root, nodes, make(map[NodeID]struct{}), next, parents, refs, changed); err != nil {
+	if err := b.commitPrepared(doc.root, nodes, make(map[NodeID]struct{}), next, parents, refs, changed); err != nil {
 		return err
 	}
 	return nil
@@ -476,6 +473,27 @@ func (b *Builder) validateNewChildren(parent NodeID, children []NodeID) error {
 	return nil
 }
 
+// validateDefinitionChildren also rejects a reserved parent that is already
+// below one of the proposed children in the current ownership forest.
+func (b *Builder) validateDefinitionChildren(parent NodeID, children []NodeID) error {
+	if err := b.validateNewChildren(parent, children); err != nil {
+		return err
+	}
+	for _, child := range children {
+		for current := parent; current != 0; {
+			if current == child {
+				return ErrInvalidDocument
+			}
+			parentRef, ok := b.draft.parents[current]
+			if !ok {
+				break
+			}
+			current = parentRef.Parent
+		}
+	}
+	return nil
+}
+
 func (b *Builder) validateReplacementChildren(parent NodeID, children []NodeID) error {
 	seen := make(map[NodeID]struct{}, len(children))
 	for _, child := range children {
@@ -543,12 +561,14 @@ func (b *Builder) commit(root NodeID, nodes map[NodeID]*docNode, reserved map[No
 	if err != nil {
 		return err
 	}
-	return b.commitWithIndexes(root, nodes, reserved, nextID, parents, refs, semanticChange)
+	return b.commitPrepared(root, nodes, reserved, nextID, parents, refs, semanticChange)
 }
 
-func (b *Builder) commitWithIndexes(root NodeID, nodes map[NodeID]*docNode, reserved map[NodeID]struct{}, nextID NodeID, parents map[NodeID]ParentRef, refs map[NodeID]map[NodeID]struct{}, semanticChange bool) error {
-	if err := validateAllocator(nodes, reserved, nextID); err != nil {
-		return err
+// commitPrepared installs a draft whose allocator and indexes were validated
+// or updated by the caller.
+func (b *Builder) commitPrepared(root NodeID, nodes map[NodeID]*docNode, reserved map[NodeID]struct{}, nextID NodeID, parents map[NodeID]ParentRef, refs map[NodeID]map[NodeID]struct{}, semanticChange bool) error {
+	if !b.ready() {
+		return ErrInvalidDocument
 	}
 	b.draft = &documentDraft{
 		root:     root,
@@ -806,6 +826,13 @@ func cloneReferences(refs map[NodeID]map[NodeID]struct{}) map[NodeID]map[NodeID]
 		cloned[target] = copySources
 	}
 	return cloned
+}
+
+func addReference(refs map[NodeID]map[NodeID]struct{}, target, source NodeID) {
+	if refs[target] == nil {
+		refs[target] = make(map[NodeID]struct{})
+	}
+	refs[target][source] = struct{}{}
 }
 
 func mappingChildren(entries []MappingEntry) []NodeID {
