@@ -21,6 +21,10 @@ var (
 	// ErrMultipleDocuments reports input containing more than one YAML document.
 	ErrMultipleDocuments = errors.New("yaml: multiple documents are not supported")
 	ErrInvalidYAML       = errors.New("yaml: unsupported or invalid node")
+	// ErrLimitExceeded reports that a configured DecodeOptions limit was hit.
+	ErrLimitExceeded = errors.New("yaml: configured decode limit exceeded")
+	// ErrInvalidDecodeOptions reports negative or otherwise invalid limits.
+	ErrInvalidDecodeOptions = errors.New("yaml: invalid decode options")
 
 	yamlIntegerPattern = regexp.MustCompile(`^(?:[+-]?(?:0|[1-9](?:_?[0-9])*)|[+-]?0[bB][01](?:_?[01])*|[+-]?0[oO][0-7](?:_?[0-7])*|[+-]?0[xX][0-9a-fA-F](?:_?[0-9a-fA-F])*)$`)
 	yamlDecimalInteger = regexp.MustCompile(`^[+-]?[0-9](?:_?[0-9])*$`)
@@ -30,14 +34,39 @@ var (
 // Codec implements codec.Codec for one YAML 1.2 Core Schema document.
 type Codec struct{}
 
+// DecodeOptions bounds resources consumed while reading a YAML document.
+// A zero limit is unlimited. MaxDepth counts the root node as depth one.
+type DecodeOptions struct {
+	MaxInputBytes int64
+	MaxNodes      int
+	MaxDepth      int
+}
+
 // Decode reads a single YAML document and binds it to a format Session.
 func Decode(reader io.Reader) (codec.Session, error) {
+	return DecodeWithOptions(reader, DecodeOptions{})
+}
+
+// DecodeWithOptions reads one YAML document while enforcing any positive
+// input byte, node count, and nesting depth limits in options.
+func DecodeWithOptions(reader io.Reader, options DecodeOptions) (codec.Session, error) {
 	if reader == nil {
 		return nil, fmt.Errorf("yaml: nil reader")
 	}
-	sourceBytes, err := io.ReadAll(reader)
+	if options.MaxInputBytes < 0 || options.MaxNodes < 0 || options.MaxDepth < 0 {
+		return nil, ErrInvalidDecodeOptions
+	}
+	limitedReader := io.Reader(reader)
+	maxInt64 := int64(^uint64(0) >> 1)
+	if options.MaxInputBytes > 0 && options.MaxInputBytes < maxInt64 {
+		limitedReader = io.LimitReader(reader, options.MaxInputBytes+1)
+	}
+	sourceBytes, err := io.ReadAll(limitedReader)
 	if err != nil {
 		return nil, err
+	}
+	if options.MaxInputBytes > 0 && int64(len(sourceBytes)) > options.MaxInputBytes {
+		return nil, fmt.Errorf("%w: maximum input size is %d bytes", ErrLimitExceeded, options.MaxInputBytes)
 	}
 	sourceText := string(sourceBytes)
 	sourceLines := strings.Split(sourceText, "\n")
@@ -70,6 +99,7 @@ func Decode(reader io.Reader) (codec.Session, error) {
 	builder := document.NewBuilder()
 	state := &decodeState{
 		builder:      builder,
+		options:      options,
 		sourceLines:  sourceLines,
 		nodeIDs:      make(map[*yamlv3.Node]document.NodeID),
 		metadata:     make(map[document.NodeID]nodeMetadata),
@@ -77,7 +107,7 @@ func Decode(reader io.Reader) (codec.Session, error) {
 		reserved:     make(map[*yamlv3.Node]bool),
 		defined:      make(map[*yamlv3.Node]bool),
 	}
-	if err := state.reserveTree(root); err != nil {
+	if err := state.reserveTree(root, 1); err != nil {
 		return nil, err
 	}
 	if err := state.defineTree(root); err != nil {
@@ -106,8 +136,16 @@ func Decode(reader io.Reader) (codec.Session, error) {
 // Decode implements codec.Codec.
 func (Codec) Decode(reader io.Reader) (codec.Session, error) { return Decode(reader) }
 
+// DecodeWithOptions reads a YAML document with caller-specified resource
+// limits. It complements the format-independent Codec interface.
+func (Codec) DecodeWithOptions(reader io.Reader, options DecodeOptions) (codec.Session, error) {
+	return DecodeWithOptions(reader, options)
+}
+
 type decodeState struct {
 	builder      *document.Builder
+	options      DecodeOptions
+	nodeCount    int
 	sourceLines  []string
 	nodeIDs      map[*yamlv3.Node]document.NodeID
 	metadata     map[document.NodeID]nodeMetadata
@@ -127,13 +165,20 @@ func emptyYAMLDocument() yamlv3.Node {
 	}
 }
 
-func (state *decodeState) reserveTree(node *yamlv3.Node) error {
+func (state *decodeState) reserveTree(node *yamlv3.Node, depth int) error {
 	if node == nil {
 		return ErrInvalidYAML
 	}
 	if state.reserved[node] {
 		return nil
 	}
+	if state.options.MaxDepth > 0 && depth > state.options.MaxDepth {
+		return fmt.Errorf("%w: maximum nesting depth is %d", ErrLimitExceeded, state.options.MaxDepth)
+	}
+	if state.options.MaxNodes > 0 && state.nodeCount >= state.options.MaxNodes {
+		return fmt.Errorf("%w: maximum node count is %d", ErrLimitExceeded, state.options.MaxNodes)
+	}
+	state.nodeCount++
 	id, err := state.builder.Reserve()
 	if err != nil {
 		return err
@@ -146,7 +191,7 @@ func (state *decodeState) reserveTree(node *yamlv3.Node) error {
 			return ErrInvalidYAML
 		}
 		for _, child := range node.Content {
-			if err := state.reserveTree(child); err != nil {
+			if err := state.reserveTree(child, depth+1); err != nil {
 				return err
 			}
 		}
