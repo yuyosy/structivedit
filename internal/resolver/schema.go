@@ -12,7 +12,8 @@ import (
 
 // CompiledSchema is an immutable, validated copy of a public Schema tree.
 type CompiledSchema struct {
-	root *schema.Node
+	root                *schema.Node
+	hasCustomValidators bool
 }
 
 // ValidationIssue is the internal form of a public validation result.
@@ -31,7 +32,26 @@ func CompileSchema(root schema.Node) (CompiledSchema, error) {
 	if err != nil {
 		return CompiledSchema{}, schema.ErrInvalidSchema
 	}
-	return CompiledSchema{root: &cloned}, nil
+	return CompiledSchema{root: &cloned, hasCustomValidators: schemaHasCustomValidators(cloned)}, nil
+}
+
+func schemaHasCustomValidators(node schema.Node) bool {
+	switch node.Kind {
+	case schema.StringKind, schema.BoolKind, schema.IntegerKind, schema.FloatKind, schema.NullKind:
+		return len(node.Scalar.Validators) > 0
+	case schema.ObjectKind:
+		if len(node.Object.Validators) > 0 {
+			return true
+		}
+		for _, field := range node.Object.Fields {
+			if schemaHasCustomValidators(field.Schema) {
+				return true
+			}
+		}
+	case schema.ArrayKind:
+		return node.Array.Item != nil && schemaHasCustomValidators(*node.Array.Item)
+	}
+	return false
 }
 
 func cloneSchemaNode(node schema.Node, active map[uintptr]bool) (schema.Node, error) {
@@ -243,6 +263,35 @@ func ValidateSchema(doc *document.Document, compiled CompiledSchema) []Validatio
 	if compiled.root != nil {
 		validateSchemaNode(doc, *compiled.root, doc.Root(), &issues)
 	}
+	sortValidationIssues(issues)
+	return append([]ValidationIssue(nil), issues...)
+}
+
+// ValidateValueChange revalidates one scalar and preserves unaffected issues.
+// Custom validators may inspect any Document node, so schemas that contain
+// them conservatively fall back to a complete validation pass.
+func ValidateValueChange(doc *document.Document, compiled CompiledSchema, previous []ValidationIssue, id document.NodeID) []ValidationIssue {
+	if doc == nil || doc.Root() == 0 {
+		return nil
+	}
+	if compiled.hasCustomValidators {
+		return ValidateSchema(doc, compiled)
+	}
+	issues := make([]ValidationIssue, 0, len(previous)+2)
+	for _, issue := range previous {
+		if issue.NodeID == id && issue.Code != "schema.duplicate_key" {
+			continue
+		}
+		issues = append(issues, issue)
+	}
+	if shape := schemaNodeAt(doc, id, compiled); shape != nil {
+		validateSchemaNode(doc, *shape, id, &issues)
+	}
+	sortValidationIssues(issues)
+	return append([]ValidationIssue(nil), issues...)
+}
+
+func sortValidationIssues(issues []ValidationIssue) {
 	sort.SliceStable(issues, func(i, j int) bool {
 		leftPath, rightPath := issues[i].Path.String(), issues[j].Path.String()
 		if leftPath != rightPath {
@@ -253,7 +302,6 @@ func ValidateSchema(doc *document.Document, compiled CompiledSchema) []Validatio
 		}
 		return issues[i].Message < issues[j].Message
 	})
-	return append([]ValidationIssue(nil), issues...)
 }
 
 func validateSchemaNode(doc *document.Document, expected schema.Node, id document.NodeID, issues *[]ValidationIssue) {
@@ -329,13 +377,17 @@ func validateScalar(doc *document.Document, rules schema.ScalarSchema, id docume
 func validateObject(doc *document.Document, rules schema.ObjectSchema, id document.NodeID, path document.Path, issues *[]ValidationIssue) {
 	entries, _ := doc.MappingEntries(id)
 	valuesByField := make(map[string][]document.NodeID, len(rules.Fields))
+	declaredFields := make(map[string]struct{}, len(rules.Fields))
+	for _, field := range rules.Fields {
+		declaredFields[field.Name] = struct{}{}
+	}
 	for _, entry := range entries {
 		kind, value, isScalar := doc.Scalar(entry.Key)
 		if !isScalar || kind != document.ScalarString {
 			continue
 		}
 		fieldName := value.(string)
-		if _, declared := schemaFieldIndex(rules.Fields, fieldName); declared {
+		if _, declared := declaredFields[fieldName]; declared {
 			valuesByField[fieldName] = append(valuesByField[fieldName], entry.Value)
 		}
 	}
@@ -385,15 +437,6 @@ func validateObject(doc *document.Document, rules schema.ObjectSchema, id docume
 			}
 		}
 	}
-}
-
-func schemaFieldIndex(fields []schema.Field, name string) (int, bool) {
-	for index := range fields {
-		if fields[index].Name == name {
-			return index, true
-		}
-	}
-	return 0, false
 }
 
 func matchesSchemaKind(node *document.Node, expected schema.Kind) bool {
@@ -528,6 +571,7 @@ func addCustomIssue(issues *[]ValidationIssue, id document.NodeID, path document
 
 func validateDuplicateKeys(doc *document.Document, issues *[]ValidationIssue) {
 	visited := make(map[document.NodeID]struct{})
+	keyHashes := make(map[document.NodeID]uint64)
 	var walk func(document.NodeID)
 	walk = func(id document.NodeID) {
 		if _, seen := visited[id]; seen {
@@ -540,15 +584,18 @@ func validateDuplicateKeys(doc *document.Document, issues *[]ValidationIssue) {
 		}
 		if node.Kind() == document.NodeMapping {
 			entries, _ := doc.MappingEntries(id)
-			for index, entry := range entries {
-				for previous := 0; previous < index; previous++ {
-					if equalMappingKey(doc, entries[previous].Key, entry.Key, make(map[nodePair]bool)) {
+			byHash := make(map[uint64][]document.NodeID, len(entries))
+			for _, entry := range entries {
+				fingerprint := mappingKeyFingerprint(doc, entry.Key, keyHashes)
+				for _, previous := range byHash[fingerprint] {
+					if equalMappingKey(doc, previous, entry.Key, make(map[nodePair]bool)) {
 						if path, err := doc.Path(entry.Value); err == nil {
 							addIssue(issues, entry.Value, path, "schema.duplicate_key", "duplicate mapping key", schema.SeverityWarning)
 						}
 						break
 					}
 				}
+				byHash[fingerprint] = append(byHash[fingerprint], entry.Key)
 				walk(entry.Key)
 				walk(entry.Value)
 			}
@@ -562,6 +609,64 @@ func validateDuplicateKeys(doc *document.Document, issues *[]ValidationIssue) {
 		}
 	}
 	walk(doc.Root())
+}
+
+func mappingKeyFingerprint(doc *document.Document, id document.NodeID, memo map[document.NodeID]uint64) uint64 {
+	if fingerprint, ok := memo[id]; ok {
+		return fingerprint
+	}
+	node, ok := doc.Node(id)
+	if !ok {
+		return 0
+	}
+	fingerprint := mixFingerprint(0x9e3779b97f4a7c15, uint64(node.Kind()))
+	switch node.Kind() {
+	case document.NodeScalar:
+		kind, value, scalar := node.Scalar()
+		if !scalar {
+			break
+		}
+		fingerprint = mixFingerprint(fingerprint, uint64(kind))
+		switch kind {
+		case document.ScalarString:
+			text := value.(string)
+			for index := 0; index < len(text); index++ {
+				fingerprint = mixFingerprint(fingerprint, uint64(text[index]))
+			}
+			fingerprint = mixFingerprint(fingerprint, uint64(len(text)))
+		case document.ScalarBool:
+			if value.(bool) {
+				fingerprint = mixFingerprint(fingerprint, 1)
+			}
+		case document.ScalarInteger:
+			fingerprint = mixFingerprint(fingerprint, uint64(value.(int64)))
+		case document.ScalarFloat:
+			fingerprint = mixFingerprint(fingerprint, math.Float64bits(value.(float64)))
+		}
+	case document.NodeSequence:
+		items, _ := doc.SequenceItems(id)
+		fingerprint = mixFingerprint(fingerprint, uint64(len(items)))
+		for _, item := range items {
+			fingerprint = mixFingerprint(fingerprint, mappingKeyFingerprint(doc, item, memo))
+		}
+	case document.NodeMapping:
+		entries, _ := doc.MappingEntries(id)
+		fingerprint = mixFingerprint(fingerprint, uint64(len(entries)))
+		for _, entry := range entries {
+			fingerprint = mixFingerprint(fingerprint, mappingKeyFingerprint(doc, entry.Key, memo))
+			fingerprint = mixFingerprint(fingerprint, mappingKeyFingerprint(doc, entry.Value, memo))
+		}
+	case document.NodeReference:
+		target, _ := doc.ReferenceTarget(id)
+		fingerprint = mixFingerprint(fingerprint, uint64(target))
+	}
+	memo[id] = fingerprint
+	return fingerprint
+}
+
+func mixFingerprint(current, value uint64) uint64 {
+	current ^= value + 0x9e3779b97f4a7c15 + (current << 6) + (current >> 2)
+	return current
 }
 
 type nodePair struct {

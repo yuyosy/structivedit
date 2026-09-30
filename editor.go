@@ -13,13 +13,17 @@ import (
 // Editor coordinates an immutable Document, its Schema and Policy, logical
 // focus, and the current validation result.
 type Editor struct {
-	doc      *document.Document
-	schema   resolver.CompiledSchema
-	policy   resolver.CompiledPolicy
-	focused  document.NodeID
-	history  *operation.History
-	issues   []ValidationIssue
-	identity *editorIdentity
+	doc               *document.Document
+	schema            resolver.CompiledSchema
+	policy            resolver.CompiledPolicy
+	focused           document.NodeID
+	history           *operation.History
+	issues            []ValidationIssue
+	identity          *editorIdentity
+	viewCache         []NodeView
+	viewCacheByID     map[document.NodeID]int
+	viewCacheRevision document.Revision
+	viewCacheValid    bool
 }
 
 type editorIdentity struct {
@@ -28,11 +32,8 @@ type editorIdentity struct {
 
 // New creates an Editor for a valid immutable Document snapshot.
 func New(doc *document.Document, options ...Option) (*Editor, error) {
-	if doc == nil {
+	if doc == nil || doc.Root() == 0 {
 		return nil, document.ErrInvalidDocument
-	}
-	if _, err := document.NewBuilderFrom(doc); err != nil {
-		return nil, err
 	}
 	settings := editorOptions{historyLimit: 100}
 	for _, option := range options {
@@ -137,6 +138,11 @@ func (e *Editor) View(id document.NodeID) (NodeView, error) {
 	if e == nil || e.doc == nil {
 		return NodeView{}, document.ErrNodeNotFound
 	}
+	if e.viewCacheValid && e.viewCacheRevision == e.doc.Revision() {
+		if index, ok := e.viewCacheByID[id]; ok {
+			return cloneNodeView(e.viewCache[index]), nil
+		}
+	}
 	return e.view(id)
 }
 
@@ -146,13 +152,20 @@ func (e *Editor) Views() []NodeView {
 	if e == nil || e.doc == nil || e.doc.Root() == 0 {
 		return nil
 	}
+	if e.viewCacheValid && e.viewCacheRevision == e.doc.Revision() {
+		return cloneNodeViews(e.viewCache)
+	}
+	issuesByNode := make(map[document.NodeID][]ValidationIssue, len(e.issues))
+	for _, issue := range e.issues {
+		issuesByNode[issue.NodeID] = append(issuesByNode[issue.NodeID], issue)
+	}
 	views := make([]NodeView, 0)
 	stack := []document.NodeID{e.doc.Root()}
 	for len(stack) > 0 {
 		last := len(stack) - 1
 		id := stack[last]
 		stack = stack[:last]
-		view, err := e.view(id)
+		view, err := e.viewWithIssues(id, issuesByNode[id])
 		if err != nil {
 			continue
 		}
@@ -162,6 +175,13 @@ func (e *Editor) Views() []NodeView {
 			stack = append(stack, children[index])
 		}
 	}
+	e.viewCache = cloneNodeViews(views)
+	e.viewCacheByID = make(map[document.NodeID]int, len(e.viewCache))
+	for index, view := range e.viewCache {
+		e.viewCacheByID[view.ID] = index
+	}
+	e.viewCacheRevision = e.doc.Revision()
+	e.viewCacheValid = true
 	return views
 }
 
@@ -207,6 +227,7 @@ func (e *Editor) Validate() []ValidationIssue {
 	}
 	issues := publicIssues(resolver.ValidateSchema(e.doc, e.schema))
 	e.issues = cloneValidationIssues(issues)
+	e.invalidateViews()
 	return cloneValidationIssues(issues)
 }
 
@@ -224,6 +245,16 @@ func (e *Editor) HasErrors() bool {
 }
 
 func (e *Editor) view(id document.NodeID) (NodeView, error) {
+	issues := make([]ValidationIssue, 0)
+	for _, issue := range e.issues {
+		if issue.NodeID == id {
+			issues = append(issues, issue)
+		}
+	}
+	return e.viewWithIssues(id, issues)
+}
+
+func (e *Editor) viewWithIssues(id document.NodeID, issues []ValidationIssue) (NodeView, error) {
 	node, ok := e.doc.Node(id)
 	if !ok {
 		return NodeView{}, document.ErrNodeNotFound
@@ -255,13 +286,31 @@ func (e *Editor) view(id document.NodeID) (NodeView, error) {
 	if capabilities, valid := resolver.ResolveCapabilities(e.doc, id, e.schema, e.policy); valid {
 		view.Capabilities = publicCapabilities(capabilities)
 	}
-	for _, issue := range e.issues {
-		if issue.NodeID == id {
-			view.Issues = append(view.Issues, issue)
-		}
-	}
-	view.Issues = cloneValidationIssues(view.Issues)
+	view.Issues = cloneValidationIssues(issues)
 	return view, nil
+}
+
+func (e *Editor) invalidateViews() {
+	if e != nil {
+		e.viewCache = nil
+		e.viewCacheByID = nil
+		e.viewCacheValid = false
+	}
+}
+
+func cloneNodeViews(views []NodeView) []NodeView {
+	cloned := make([]NodeView, len(views))
+	for index, view := range views {
+		cloned[index] = cloneNodeView(view)
+	}
+	return cloned
+}
+
+func cloneNodeView(view NodeView) NodeView {
+	view.SequenceItems = append([]document.NodeID(nil), view.SequenceItems...)
+	view.MappingEntries = append([]document.MappingEntry(nil), view.MappingEntries...)
+	view.Issues = cloneValidationIssues(view.Issues)
+	return view
 }
 
 func (e *Editor) applyFocus(id document.NodeID) (ApplyResult, error) {
@@ -348,7 +397,7 @@ func (e *Editor) applySetValue(id document.NodeID, value any) (ApplyResult, erro
 	if err != nil {
 		return ApplyResult{}, err
 	}
-	updatedIssues := publicIssues(resolver.ValidateSchema(updated, e.schema))
+	updatedIssues := publicIssues(resolver.ValidateValueChange(updated, e.schema, internalIssues(e.issues), id))
 	previousIssues := e.issues
 	effect := operation.Effect{
 		Kind:        operation.EffectValueChanged,
@@ -361,6 +410,7 @@ func (e *Editor) applySetValue(id document.NodeID, value any) (ApplyResult, erro
 	}
 	e.doc = updated
 	e.issues = cloneValidationIssues(updatedIssues)
+	e.invalidateViews()
 	result := ApplyResult{DocumentChanged: true, Revision: updated.Revision()}
 	result.Events = append(result.Events, eventsForEffects([]operation.Effect{effect}, updated.Revision())...)
 	if !equalIssues(previousIssues, updatedIssues) {
@@ -391,15 +441,17 @@ func (e *Editor) applyUndo() (ApplyResult, error) {
 	if err != nil {
 		return ApplyResult{}, err
 	}
-	updatedIssues := publicIssues(resolver.ValidateSchema(updated, e.schema))
+	effects := entry.Effects(true)
+	updatedIssues := publicIssues(validateAfterEffects(updated, e.schema, e.issues, effects))
 	if !e.history.CommitUndo() {
 		return ApplyResult{}, ErrNoUndo
 	}
 	previousIssues := e.issues
 	e.doc = updated
 	e.issues = cloneValidationIssues(updatedIssues)
+	e.invalidateViews()
 	result := ApplyResult{DocumentChanged: true, Revision: updated.Revision()}
-	result.Events = append(result.Events, eventsForEffects(entry.Effects(true), updated.Revision())...)
+	result.Events = append(result.Events, eventsForEffects(effects, updated.Revision())...)
 	if !equalIssues(previousIssues, updatedIssues) {
 		result.Events = append(result.Events, Event{Kind: EventValidationChanged, Issues: cloneValidationIssues(updatedIssues), Revision: updated.Revision()})
 	}
@@ -424,15 +476,17 @@ func (e *Editor) applyRedo() (ApplyResult, error) {
 	if err != nil {
 		return ApplyResult{}, err
 	}
-	updatedIssues := publicIssues(resolver.ValidateSchema(updated, e.schema))
+	effects := entry.Effects(false)
+	updatedIssues := publicIssues(validateAfterEffects(updated, e.schema, e.issues, effects))
 	if !e.history.CommitRedo() {
 		return ApplyResult{}, ErrNoRedo
 	}
 	previousIssues := e.issues
 	e.doc = updated
 	e.issues = cloneValidationIssues(updatedIssues)
+	e.invalidateViews()
 	result := ApplyResult{DocumentChanged: true, Revision: updated.Revision()}
-	result.Events = append(result.Events, eventsForEffects(entry.Effects(false), updated.Revision())...)
+	result.Events = append(result.Events, eventsForEffects(effects, updated.Revision())...)
 	if !equalIssues(previousIssues, updatedIssues) {
 		result.Events = append(result.Events, Event{Kind: EventValidationChanged, Issues: cloneValidationIssues(updatedIssues), Revision: updated.Revision()})
 	}
@@ -495,6 +549,27 @@ func publicIssues(issues []resolver.ValidationIssue) []ValidationIssue {
 		}
 	}
 	return converted
+}
+
+func internalIssues(issues []ValidationIssue) []resolver.ValidationIssue {
+	converted := make([]resolver.ValidationIssue, len(issues))
+	for index, issue := range issues {
+		converted[index] = resolver.ValidationIssue{
+			NodeID:   issue.NodeID,
+			Path:     issue.Path,
+			Code:     issue.Code,
+			Message:  issue.Message,
+			Severity: issue.Severity,
+		}
+	}
+	return converted
+}
+
+func validateAfterEffects(doc *document.Document, compiled resolver.CompiledSchema, previous []ValidationIssue, effects []operation.Effect) []resolver.ValidationIssue {
+	if len(effects) == 1 && effects[0].Kind == operation.EffectValueChanged {
+		return resolver.ValidateValueChange(doc, compiled, internalIssues(previous), effects[0].NodeID)
+	}
+	return resolver.ValidateSchema(doc, compiled)
 }
 
 func publicCapabilities(capabilities resolver.ResolvedPolicy) Capabilities {
