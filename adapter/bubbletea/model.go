@@ -25,8 +25,10 @@ const (
 )
 
 type editBuffer struct {
-	nodeID document.NodeID
-	value  textInput
+	nodeID       document.NodeID
+	value        textInput
+	multiline    bool
+	viewportLine int
 }
 
 type addPrompt struct {
@@ -67,27 +69,30 @@ type hitRegion struct {
 // File I/O stays with the caller; SetSaveHandler connects an explicit save key
 // to the caller's persistence logic.
 type Model struct {
-	editor           *structivedit.Editor
-	mode             mode
-	cursorMode       cursorMode
-	expanded         map[document.NodeID]bool
-	edit             editBuffer
-	add              addPrompt
-	delete           deletePrompt
-	viewport         viewport
-	width            int
-	height           int
-	message          string
-	messageError     bool
-	saveHandler      func() error
-	hitRegions       []hitRegion
-	lastClick        mouseClickState
-	showAllShortcuts bool
-	expandAliases    bool
-	colorsEnabled    bool
-	inlineEditing    bool
-	mouseDoubleClick bool
-	styles           terminalStyles
+	editor            *structivedit.Editor
+	mode              mode
+	cursorMode        cursorMode
+	expanded          map[document.NodeID]bool
+	edit              editBuffer
+	add               addPrompt
+	delete            deletePrompt
+	viewport          viewport
+	width             int
+	height            int
+	message           string
+	messageError      bool
+	saveHandler       func() error
+	hitRegions        []hitRegion
+	lastClick         mouseClickState
+	inputCursorX      int
+	inputCursorY      int
+	inputCursorInTree bool
+	showAllShortcuts  bool
+	expandAliases     bool
+	colorsEnabled     bool
+	inlineEditing     bool
+	mouseDoubleClick  bool
+	styles            terminalStyles
 }
 
 // NewModel creates a terminal model for editor. Containers at the root and

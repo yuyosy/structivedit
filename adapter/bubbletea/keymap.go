@@ -2,6 +2,7 @@ package bubbletea
 
 import (
 	"fmt"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/yuyosy/structivedit"
@@ -106,28 +107,69 @@ func (model *Model) handleEditKey(key tea.Key) {
 		return
 	}
 	if key.Code == tea.KeyEnter {
-		view, err := model.editor.View(model.edit.nodeID)
-		if err != nil {
-			model.fail(err)
-			model.mode = browseMode
+		if model.edit.multiline && key.Mod.Contains(tea.ModShift) {
+			model.edit.value.insertNewline()
+			model.keepMultilineCursorVisible()
 			return
 		}
-		current, _, ok := model.editor.Document().Scalar(view.ID)
-		if !ok {
-			model.fail(document.ErrInvalidDocument)
-			model.mode = browseMode
-			return
-		}
-		value, err := parseScalarInput(current, model.edit.value.String())
-		if err != nil {
-			model.setErrorMessage(err.Error())
-			return
-		}
-		model.mode = browseMode
-		model.apply(structivedit.SetValue{NodeID: model.edit.nodeID, Value: value})
+		model.commitEdit()
 		return
 	}
-	model.edit.value.handleKey(key)
+	if model.edit.multiline && key.Code == tea.KeyTab {
+		model.edit.value.insert([]rune{'\t'})
+		model.keepMultilineCursorVisible()
+		return
+	}
+	model.edit.value.handleKey(key, model.edit.multiline)
+	model.keepMultilineCursorVisible()
+}
+
+func (model *Model) keepMultilineCursorVisible() {
+	if model == nil || !model.edit.multiline {
+		return
+	}
+	lines := model.edit.value.lines()
+	if len(lines) == 0 {
+		return
+	}
+	cursorLine, _ := model.edit.value.cursorLineColumn(lines)
+	visible := min(multilineEditorMaxVisibleLines, len(lines))
+	start := model.edit.viewportLine
+	if cursorLine < start {
+		start = cursorLine
+	} else if cursorLine >= start+visible {
+		start = cursorLine - visible + 1
+	}
+	maximum := len(lines) - visible
+	if start > maximum {
+		start = maximum
+	}
+	if start < 0 {
+		start = 0
+	}
+	model.edit.viewportLine = start
+}
+
+func (model *Model) commitEdit() {
+	view, err := model.editor.View(model.edit.nodeID)
+	if err != nil {
+		model.fail(err)
+		model.mode = browseMode
+		return
+	}
+	current, _, ok := model.editor.Document().Scalar(view.ID)
+	if !ok {
+		model.fail(document.ErrInvalidDocument)
+		model.mode = browseMode
+		return
+	}
+	value, err := parseScalarInput(current, model.edit.value.String())
+	if err != nil {
+		model.setErrorMessage(err.Error())
+		return
+	}
+	model.mode = browseMode
+	model.apply(structivedit.SetValue{NodeID: model.edit.nodeID, Value: value})
 }
 
 func (model *Model) handleAddFieldKey(key tea.Key) {
@@ -152,7 +194,7 @@ func (model *Model) handleAddFieldKey(key tea.Key) {
 		model.beginAddPlan(plan)
 		return
 	}
-	model.add.field.handleKey(key)
+	model.add.field.handleKey(key, false)
 }
 
 func (model *Model) handleAddValueKey(key tea.Key) {
@@ -186,7 +228,7 @@ func (model *Model) handleAddValueKey(key tea.Key) {
 		model.commitAdd()
 		return
 	}
-	model.add.input.handleKey(key)
+	model.add.input.handleKey(key, false)
 }
 
 func (model *Model) handleDeleteKey(key tea.Key) {
@@ -311,9 +353,15 @@ func (model *Model) enterFocused() {
 	if view.Kind == document.NodeScalar && view.Capabilities.Editable {
 		kind, value, scalar := model.editor.Document().Scalar(id)
 		if scalar {
-			model.edit = editBuffer{nodeID: id, value: newTextInput(scalarText(kind, value))}
+			text := scalarText(kind, value)
+			model.edit = editBuffer{
+				nodeID:    id,
+				value:     newTextInput(text),
+				multiline: kind == document.ScalarString && strings.ContainsAny(text, "\r\n"),
+			}
 			model.showAllShortcuts = false
 			model.mode = editMode
+			model.keepMultilineCursorVisible()
 			model.clearMessage()
 		}
 	}
@@ -519,8 +567,11 @@ func (model *Model) visibleRowCount() int {
 func (model *Model) inputAreaLineCount() int {
 	switch model.mode {
 	case editMode:
-		if model.inlineEditing {
+		if model.inlineEditing && !model.edit.multiline {
 			return 1
+		}
+		if model.edit.multiline {
+			return 1 + min(multilineEditorMaxVisibleLines, len(model.edit.value.lines()))
 		}
 		return 2
 	case addFieldMode, addValueMode:

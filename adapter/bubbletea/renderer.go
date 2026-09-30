@@ -2,6 +2,7 @@ package bubbletea
 
 import (
 	"fmt"
+	"image/color"
 	"math"
 	"strconv"
 	"strings"
@@ -12,6 +13,8 @@ import (
 	"github.com/yuyosy/structivedit/document"
 	"github.com/yuyosy/structivedit/schema"
 )
+
+const multilineEditorMaxVisibleLines = 5
 
 func (model *Model) visibleRows() []treeRow {
 	if model == nil || model.editor == nil || model.editor.Document() == nil {
@@ -228,6 +231,9 @@ func (model *Model) render() tea.View {
 		view.AltScreen = true
 		return view
 	}
+	model.inputCursorX = -1
+	model.inputCursorY = -1
+	model.inputCursorInTree = false
 	rows := model.visibleRows()
 	model.keepFocusVisible()
 	count := model.visibleRowCount()
@@ -293,7 +299,7 @@ func (model *Model) render() tea.View {
 	focused, hasFocus := model.editor.Focused()
 	for index := start; index < end; index++ {
 		row := rows[index]
-		inlineEditing := model.inlineEditing && model.mode == editMode && row.nodeID == model.edit.nodeID
+		inlineEditing := model.inlineEditing && model.mode == editMode && !model.edit.multiline && row.nodeID == model.edit.nodeID
 		cursor := " "
 		cursorStyle := model.styles.plain
 		valueCursor := ""
@@ -338,7 +344,11 @@ func (model *Model) render() tea.View {
 				segments = clipLineSegments(segments, maxPrefixWidth, model.styles.muted)
 				prefixWidth = lineSegmentWidth(segments)
 			}
-			segments = append(segments, model.inlineInputSegments(model.edit.value, width-prefixWidth)...)
+			inputSegments, cursorOffset := model.inlineInputSegments(model.edit.value, width-prefixWidth)
+			model.inputCursorX = prefixWidth + cursorOffset
+			model.inputCursorY = len(lines)
+			model.inputCursorInTree = true
+			segments = append(segments, inputSegments...)
 		} else {
 			segments = append(segments,
 				lineSegment{text: valueCursor, style: model.styles.cursor},
@@ -359,8 +369,12 @@ func (model *Model) render() tea.View {
 	for len(lines)-3 < count {
 		lines = append(lines, "")
 	}
+	inputAreaTop := len(lines)
 	for _, inputLine := range model.inputAreaLines(width) {
 		lines = append(lines, model.renderStyledLine(width, inputLine...))
+	}
+	if model.inputCursorX >= 0 && model.inputCursorY >= 0 && !model.inputCursorInTree {
+		model.inputCursorY += inputAreaTop
 	}
 	for _, helpLine := range helpLines {
 		lines = append(lines, model.renderStyledLine(width, helpLine...))
@@ -368,6 +382,15 @@ func (model *Model) render() tea.View {
 	view := tea.NewView(strings.Join(lines, "\n"))
 	view.AltScreen = true
 	view.MouseMode = tea.MouseModeCellMotion
+	if model.inputCursorX >= 0 && model.inputCursorY >= 0 {
+		cursor := tea.NewCursor(model.inputCursorX, model.inputCursorY)
+		cursor.Shape = tea.CursorBar
+		cursor.Blink = false
+		if model.colorsActive() {
+			cursor.Color = color.RGBA{R: 255, G: 215, B: 0, A: 255}
+		}
+		view.Cursor = cursor
+	}
 	return view
 }
 
@@ -376,6 +399,9 @@ func (model *Model) statusContext() string {
 	switch model.mode {
 	case editMode:
 		context = "Editing"
+		if model.edit.multiline {
+			context = "Editing multiline"
+		}
 		if model.inlineEditing {
 			context = "Editing inline"
 		}
@@ -402,17 +428,34 @@ func (model *Model) inputAreaLines(width int) [][]lineSegment {
 		if model.inlineEditing {
 			label = " Editing inline "
 		}
+		if model.edit.multiline {
+			label = " Edit multiline "
+		}
 		context := []lineSegment{
 			{text: label, style: model.styles.inputLabel},
 			{text: model.editPath(), style: model.styles.inputPath},
 		}
-		if model.inlineEditing {
+		if model.edit.multiline {
+			lines := model.edit.value.lines()
+			start := model.edit.viewportLine
+			if start < 0 {
+				start = 0
+			}
+			if start >= len(lines) {
+				start = len(lines) - 1
+			}
+			end := start + min(multilineEditorMaxVisibleLines, len(lines)-start)
+			context = append(context, lineSegment{
+				text:  fmt.Sprintf("  lines %d-%d/%d", start+1, end, len(lines)),
+				style: model.styles.inputLabel,
+			})
+		} else if model.inlineEditing {
 			return [][]lineSegment{model.fullWidthLine(width, append([]lineSegment{{text: " ", style: model.styles.contextArea}}, context...), model.styles.contextArea)}
 		}
-		return model.inputPromptLines(width, context, model.edit.value)
+		return model.inputPromptLines(width, context, model.edit.value, model.edit.multiline)
 	case addFieldMode:
 		context := []lineSegment{{text: " Add mapping field", style: model.styles.inputLabel}}
-		return model.inputPromptLines(width, context, model.add.field)
+		return model.inputPromptLines(width, context, model.add.field, false)
 	case addValueMode:
 		if model.add.inputAt < 0 || model.add.inputAt >= len(model.add.plan.Inputs) {
 			return [][]lineSegment{nil, model.fullWidthLine(width, nil, model.styles.inputArea)}
@@ -426,7 +469,7 @@ func (model *Model) inputAreaLines(width int) [][]lineSegment {
 			text:  fmt.Sprintf(" Add %s (%s, %d/%d, %s)", request.Label, schemaKindName(request.ExpectedKind), model.add.inputAt+1, len(model.add.plan.Inputs), optional),
 			style: model.styles.inputLabel,
 		}}
-		return model.inputPromptLines(width, context, model.add.input)
+		return model.inputPromptLines(width, context, model.add.input, false)
 	case deleteConfirmMode:
 		choice := "[Cancel]  Confirm"
 		if model.delete.confirm {
@@ -443,40 +486,164 @@ func (model *Model) inputAreaLines(width int) [][]lineSegment {
 	}
 }
 
-func (model *Model) inputPromptLines(width int, context []lineSegment, input textInput) [][]lineSegment {
+func (model *Model) inputPromptLines(width int, context []lineSegment, input textInput, multiline bool) [][]lineSegment {
 	context = append([]lineSegment{{text: " ", style: model.styles.contextArea}}, context...)
 	contextLine := model.fullWidthLine(width, context, model.styles.contextArea)
-	inputLine := model.inputValueLine(width, input)
+	if multiline {
+		lines := input.lines()
+		cursorLine, cursorColumn := input.cursorLineColumn(lines)
+		start := model.edit.viewportLine
+		if start < 0 {
+			start = 0
+		}
+		if start >= len(lines) {
+			start = len(lines) - 1
+		}
+		end := start + min(multilineEditorMaxVisibleLines, len(lines)-start)
+		result := [][]lineSegment{contextLine}
+		for lineIndex := start; lineIndex < end; lineIndex++ {
+			line := lines[lineIndex]
+			lineRunes := input.runes[line.start:line.end]
+			column := 0
+			active := lineIndex == cursorLine
+			if active {
+				column = cursorColumn
+			}
+			lineSegments, cursorX := model.multilineInputLine(width, lineRunes, column, active)
+			result = append(result, lineSegments)
+			if active {
+				model.inputCursorX = cursorX
+				model.inputCursorY = len(result) - 1
+			}
+		}
+		return result
+	}
+	inputLine, cursorX := model.inputValueLine(width, input)
+	model.inputCursorX = cursorX
+	model.inputCursorY = 1
 	return [][]lineSegment{contextLine, inputLine}
 }
 
-func (model *Model) inputValueLine(width int, input textInput) []lineSegment {
+func (model *Model) multilineInputLine(width int, runes []rune, cursor int, active bool) ([]lineSegment, int) {
+	segments := []lineSegment{{text: " ", style: model.styles.inputArea}}
+	if width <= 1 {
+		return segments, 0
+	}
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor > len(runes) {
+		cursor = len(runes)
+	}
+	if !active {
+		text := inputPrefixWindow(displayInputText(runes), width-1)
+		segments = append(segments, lineSegment{text: text, style: model.styles.inputText})
+		return padInputLine(segments, width, model.styles.inputArea), -1
+	}
+	before := displayInputText(runes[:cursor])
+	after := displayInputText(runes[cursor:])
+	textWidth := width - 2 // one leading cell and the cursor marker
+	leftBudget := (textWidth + 1) / 2
+	rightBudget := textWidth - leftBudget
+	left := inputSuffixWindow(before, leftBudget)
+	right := inputPrefixWindow(after, rightBudget)
+	remaining := textWidth - lipgloss.Width(left) - lipgloss.Width(right)
+	if remaining > 0 {
+		right = inputPrefixWindow(after, rightBudget+remaining)
+		remaining = textWidth - lipgloss.Width(left) - lipgloss.Width(right)
+	}
+	if remaining > 0 {
+		left = inputSuffixWindow(before, leftBudget+remaining)
+	}
+	if left != "" {
+		segments = append(segments, lineSegment{text: left, style: model.styles.inputText})
+	}
+	if right != "" {
+		segments = append(segments, lineSegment{text: right, style: model.styles.inputText})
+	}
+	return padInputLine(segments, width, model.styles.inputArea), 1 + lipgloss.Width(left)
+}
+
+func inputSuffixWindow(value string, width int) string {
+	if width <= 0 || value == "" {
+		return ""
+	}
+	if lipgloss.Width(value) <= width {
+		return value
+	}
+	if width == 1 {
+		return "…"
+	}
+	runes := []rune(value)
+	start := len(runes)
+	for start > 0 {
+		candidate := string(runes[start-1:])
+		if lipgloss.Width("…"+candidate) > width {
+			break
+		}
+		start--
+	}
+	return "…" + string(runes[start:])
+}
+
+func inputPrefixWindow(value string, width int) string {
+	if width <= 0 || value == "" {
+		return ""
+	}
+	if lipgloss.Width(value) <= width {
+		return value
+	}
+	if width == 1 {
+		return "…"
+	}
+	runes := []rune(value)
+	end := 0
+	for end < len(runes) {
+		candidate := string(runes[:end+1])
+		if lipgloss.Width(candidate+"…") > width {
+			break
+		}
+		end++
+	}
+	return string(runes[:end]) + "…"
+}
+
+func padInputLine(segments []lineSegment, width int, background lipgloss.Style) []lineSegment {
+	used := 0
+	for _, segment := range segments {
+		used += lipgloss.Width(segment.text)
+	}
+	if used < width {
+		segments = append(segments, lineSegment{text: strings.Repeat(" ", width-used), style: background})
+	}
+	return segments
+}
+
+func (model *Model) inputValueLine(width int, input textInput) ([]lineSegment, int) {
 	before, after := inputWindow(input, width-2)
 	segments := []lineSegment{{text: " ", style: model.styles.inputArea}}
 	if before != "" {
 		segments = append(segments, lineSegment{text: before, style: model.styles.inputText})
 	}
-	segments = append(segments, lineSegment{text: "|", style: model.styles.inputCursor})
 	if after != "" {
 		segments = append(segments, lineSegment{text: after, style: model.styles.inputText})
 	}
-	return model.fullWidthLine(width, segments, model.styles.inputArea)
+	return model.fullWidthLine(width, segments, model.styles.inputArea), 1 + lipgloss.Width(before)
 }
 
-func (model *Model) inlineInputSegments(input textInput, width int) []lineSegment {
+func (model *Model) inlineInputSegments(input textInput, width int) ([]lineSegment, int) {
 	if width <= 0 {
-		return nil
+		return nil, 0
 	}
 	before, after := inputWindow(input, width-1)
 	segments := make([]lineSegment, 0, 3)
 	if before != "" {
 		segments = append(segments, lineSegment{text: before, style: model.styles.inputText})
 	}
-	segments = append(segments, lineSegment{text: "|", style: model.styles.inputCursor})
 	if after != "" {
 		segments = append(segments, lineSegment{text: after, style: model.styles.inputText})
 	}
-	return model.fullWidthLine(width, segments, model.styles.inputArea)
+	return model.fullWidthLine(width, segments, model.styles.inputArea), lipgloss.Width(before)
 }
 
 func lineSegmentWidth(segments []lineSegment) int {
@@ -705,6 +872,26 @@ func (model *Model) keyboardHelpLineCount() int {
 }
 
 func (model *Model) keyboardHelpLines(width int) [][]lineSegment {
+	if model.mode == editMode {
+		shortcuts := [][2]string{
+			{"←/→", " cursor"},
+			{"Home/End", " start/end"},
+			{"Enter", " save"},
+			{"Esc", " cancel"},
+		}
+		if model.edit.multiline {
+			shortcuts = [][2]string{
+				{"←/→", " cursor"},
+				{"↑/↓", " cursor"},
+				{"Home/End", " line edge"},
+				{"Tab", " tab"},
+				{"Enter", " save"},
+				{"Shift+Enter", " newline"},
+				{"Esc", " cancel"},
+			}
+		}
+		return [][]lineSegment{model.compactShortcutLine(width, shortcuts, false)}
+	}
 	groups := [][][2]string{
 		{
 			{"↑/↓", " move"},
@@ -722,9 +909,6 @@ func (model *Model) keyboardHelpLines(width int) [][]lineSegment {
 			{"d", " delete"},
 			{"q", " quit"},
 		},
-	}
-	if model.mode == editMode {
-		groups[0][2][1] = " save"
 	}
 	if model.mode != browseMode {
 		groups[1][5] = [2]string{"Esc", " cancel"}
