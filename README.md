@@ -143,6 +143,10 @@ merge entries. Aliases and merge entries are read-only. Custom tags retain their
 tag and representable payload and make the tagged root read-only. Integers
 outside the signed 64-bit range are rejected.
 
+For input from untrusted sources, use `yamlcodec.DecodeWithOptions` to cap the
+input size, node count, or nesting depth. Zero leaves a limit unlimited, and
+`yamlcodec.Decode` keeps its unlimited behavior for compatibility.
+
 Encoding preserves metadata by NodeID across edits, reordering, undo, and redo.
 Output is UTF-8 with LF line endings, two-space indentation, and a final newline;
 byte-for-byte source reproduction is not promised. Unrepresentable node or tag
@@ -160,4 +164,16 @@ Build all packages with:
 go build ./...
 ```
 
-GitHub Actions builds with Go 1.27 and the current stable Go release.
+Run the package tests with:
+
+```sh
+go test ./...
+```
+
+Run the larger-document performance benchmarks with:
+
+```sh
+go test -run '^$' -bench 'Benchmark(BuilderReserveAndDefine|DecodeLargeMapping|EditorViews|ValidateDuplicateKeys)' ./...
+```
+
+GitHub Actions tests and builds with Go 1.27 and the current stable Go release.
