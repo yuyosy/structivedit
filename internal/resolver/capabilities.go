@@ -73,6 +73,12 @@ func canAddTo(doc *document.Document, id document.NodeID, compiled CompiledSchem
 				break
 			}
 		}
+		if !eligible && shape.Object.AdditionalProperties != nil && shape.Object.UnknownFields != schema.UnknownFieldDeny {
+			eligible = true
+		}
+		if !eligible && shape.Object.UnknownFields == schema.UnknownFieldDeny {
+			return false
+		}
 	default:
 		return false
 	}
@@ -92,15 +98,12 @@ func canDelete(doc *document.Document, id document.NodeID, compiled CompiledSche
 		return false
 	}
 	shape := schemaNodeAt(doc, id, compiled)
-	if shape == nil {
-		return false
-	}
 	eligible := false
 	deletionRoots := []document.NodeID{id}
 	switch parent.Role {
 	case document.ParentSequenceItem:
 		containerShape := schemaNodeAt(doc, parent.Parent, compiled)
-		if containerShape == nil || containerShape.Kind != schema.ArrayKind {
+		if shape == nil || containerShape == nil || containerShape.Kind != schema.ArrayKind {
 			return false
 		}
 		items, ok := doc.SequenceItems(parent.Parent)
@@ -126,7 +129,7 @@ func canDelete(doc *document.Document, id document.NodeID, compiled CompiledSche
 	default:
 		return false
 	}
-	if !eligible || !applySchemaDecision(shape.Capabilities.Delete, true) {
+	if !eligible || (shape != nil && !applySchemaDecision(shape.Capabilities.Delete, true)) {
 		return false
 	}
 	return deletionSafe(doc, deletionRoots)
@@ -188,14 +191,19 @@ func schemaNodeAt(doc *document.Document, id document.NodeID, compiled CompiledS
 			}
 			entry := entries[typed.EntryIndex()]
 			kind, keyValue, scalar := doc.Scalar(entry.Key)
-			if !scalar || kind != document.ScalarString {
+			if scalar && kind == document.ScalarString {
+				if field, exists := schemaField(currentSchema.Object.Fields, keyValue.(string)); exists {
+					currentSchema = &field.Schema
+				} else if currentSchema.Object.AdditionalProperties != nil {
+					currentSchema = currentSchema.Object.AdditionalProperties
+				} else {
+					return nil
+				}
+			} else if currentSchema.Object.AdditionalProperties != nil {
+				currentSchema = currentSchema.Object.AdditionalProperties
+			} else {
 				return nil
 			}
-			field, exists := schemaField(currentSchema.Object.Fields, keyValue.(string))
-			if !exists {
-				return nil
-			}
-			currentSchema = &field.Schema
 			currentID = entry.Value
 		default:
 			return nil
@@ -244,6 +252,18 @@ func ObjectFieldSchema(doc *document.Document, id document.NodeID, name string, 
 	return schema.Field{}, false
 }
 
+// AdditionalPropertySchemaAt returns the value schema for a new, undeclared
+// string-keyed property when the object's policy permits adding one.
+func AdditionalPropertySchemaAt(doc *document.Document, id document.NodeID, compiled CompiledSchema) (schema.Node, bool) {
+	node, ok := doc.Node(id)
+	shape := schemaNodeAt(doc, id, compiled)
+	if !ok || shape == nil || node.Kind() != document.NodeMapping || shape.Kind != schema.ObjectKind ||
+		shape.Object.AdditionalProperties == nil || shape.Object.UnknownFields == schema.UnknownFieldDeny {
+		return schema.Node{}, false
+	}
+	return *shape.Object.AdditionalProperties, true
+}
+
 func schemaField(fields []schema.Field, name string) (*schema.Field, bool) {
 	for index := range fields {
 		if fields[index].Name == name {
@@ -259,10 +279,14 @@ func schemaFieldForValue(doc *document.Document, parent document.NodeID, entryIn
 		return nil, false
 	}
 	kind, value, scalar := doc.Scalar(entries[entryIndex].Key)
-	if !scalar || kind != document.ScalarString {
-		return nil, false
+	if scalar && kind == document.ScalarString {
+		if field, exists := schemaField(shape.Object.Fields, value.(string)); exists {
+			return field, true
+		}
 	}
-	return schemaField(shape.Object.Fields, value.(string))
+	// Additional properties are optional by definition and can be deleted even
+	// when no value schema is configured or the validation policy reports them.
+	return &schema.Field{}, true
 }
 
 func applySchemaDecision(decision schema.Decision, inherited bool) bool {

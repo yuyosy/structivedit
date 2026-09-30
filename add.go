@@ -185,8 +185,15 @@ func (e *Editor) prepareCandidate(parent document.NodeID, target AddTarget) (*ad
 			return nil, nil, ErrNotAddable
 		}
 		field, exists := schemaField(fields, target.Field)
-		if !exists || objectFieldExists(e.doc, parent, target.Field) {
+		if objectFieldExists(e.doc, parent, target.Field) {
 			return nil, nil, ErrNotAddable
+		}
+		if !exists {
+			additional, allowed := resolver.AdditionalPropertySchemaAt(e.doc, parent, e.schema)
+			if !allowed {
+				return nil, nil, ErrNotAddable
+			}
+			field.Schema = additional
 		}
 		fieldDefault = field.HasDefault
 		defaultValue = field.Default

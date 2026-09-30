@@ -25,10 +25,14 @@ type ScalarSchema struct {
 	Validators []Validator
 }
 
-// ObjectSchema describes the declared fields of an object in schema order.
+// ObjectSchema describes an object's declared and additional fields.
 type ObjectSchema struct {
-	Fields     []Field
-	Validators []ObjectValidator
+	Fields []Field
+	// AdditionalProperties validates values for undeclared keys and supplies
+	// the schema used to add a new key when UnknownFields permits it.
+	AdditionalProperties *Node
+	UnknownFields        UnknownFieldPolicy
+	Validators           []ObjectValidator
 }
 
 // Field describes one named object field.

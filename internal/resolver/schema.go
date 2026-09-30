@@ -48,6 +48,9 @@ func schemaHasCustomValidators(node schema.Node) bool {
 				return true
 			}
 		}
+		if node.Object.AdditionalProperties != nil {
+			return schemaHasCustomValidators(*node.Object.AdditionalProperties)
+		}
 	case schema.ArrayKind:
 		return node.Array.Item != nil && schemaHasCustomValidators(*node.Array.Item)
 	}
@@ -115,6 +118,9 @@ func cloneSchemaNode(node schema.Node, active map[uintptr]bool) (schema.Node, er
 		}
 		cloned.Scalar.Validators = append([]schema.Validator(nil), node.Scalar.Validators...)
 	case schema.ObjectKind:
+		if node.Object.UnknownFields > schema.UnknownFieldDeny {
+			return schema.Node{}, schema.ErrInvalidSchema
+		}
 		if node.Object.Fields != nil {
 			identity := reflect.ValueOf(node.Object.Fields).Pointer()
 			if identity != 0 && active[identity] {
@@ -150,6 +156,19 @@ func cloneSchemaNode(node schema.Node, active map[uintptr]bool) (schema.Node, er
 				HasDefault: field.HasDefault,
 				Default:    field.Default,
 			}
+		}
+		if node.Object.AdditionalProperties != nil {
+			identity := reflect.ValueOf(node.Object.AdditionalProperties).Pointer()
+			if identity == 0 || active[identity] {
+				return schema.Node{}, schema.ErrInvalidSchema
+			}
+			active[identity] = true
+			additional, err := cloneSchemaNode(*node.Object.AdditionalProperties, active)
+			delete(active, identity)
+			if err != nil {
+				return schema.Node{}, schema.ErrInvalidSchema
+			}
+			cloned.Object.AdditionalProperties = &additional
 		}
 		cloned.Object.Validators = append([]schema.ObjectValidator(nil), node.Object.Validators...)
 	case schema.ArrayKind:
@@ -187,7 +206,7 @@ func schemaScalarHasData(value schema.ScalarSchema) bool {
 }
 
 func schemaObjectHasData(value schema.ObjectSchema) bool {
-	return value.Fields != nil || value.Validators != nil
+	return value.Fields != nil || value.AdditionalProperties != nil || value.UnknownFields != schema.UnknownFieldAllow || value.Validators != nil
 }
 
 func schemaArrayHasData(value schema.ArraySchema) bool {
@@ -383,12 +402,30 @@ func validateObject(doc *document.Document, rules schema.ObjectSchema, id docume
 	}
 	for _, entry := range entries {
 		kind, value, isScalar := doc.Scalar(entry.Key)
-		if !isScalar || kind != document.ScalarString {
-			continue
+		if isScalar && kind == document.ScalarString {
+			fieldName := value.(string)
+			if _, declared := declaredFields[fieldName]; declared {
+				valuesByField[fieldName] = append(valuesByField[fieldName], entry.Value)
+				continue
+			}
 		}
-		fieldName := value.(string)
-		if _, declared := declaredFields[fieldName]; declared {
-			valuesByField[fieldName] = append(valuesByField[fieldName], entry.Value)
+
+		if rules.UnknownFields != schema.UnknownFieldAllow {
+			keyPath, err := doc.Path(entry.Key)
+			if err == nil {
+				severity := schema.SeverityWarning
+				if rules.UnknownFields == schema.UnknownFieldDeny {
+					severity = schema.SeverityError
+				}
+				message := "unknown field with a non-string key"
+				if isScalar && kind == document.ScalarString {
+					message = fmt.Sprintf("unknown field %q", value.(string))
+				}
+				addIssue(issues, entry.Key, keyPath, "schema.unknown_field", message, severity)
+			}
+		}
+		if rules.AdditionalProperties != nil {
+			validateSchemaNode(doc, *rules.AdditionalProperties, entry.Value, issues)
 		}
 	}
 

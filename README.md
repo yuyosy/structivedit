@@ -134,6 +134,23 @@ arraySchema := schema.Node{
 Schemas are copied and validated when an Editor is created. Schema cycles are
 rejected.
 
+Object schemas accept undeclared keys by default, matching the existing
+permissive behavior. Set `UnknownFields` to `schema.UnknownFieldWarn` or
+`schema.UnknownFieldDeny` to report them as warnings or errors. An
+`AdditionalProperties` schema validates their values and enables schema-driven
+addition of new keys when the policy permits it:
+
+```go
+additionalValue := schema.Node{Kind: schema.StringKind}
+objectSchema := schema.Node{
+	Kind: schema.ObjectKind,
+	Object: schema.ObjectSchema{
+		AdditionalProperties: &additionalValue,
+		UnknownFields:        schema.UnknownFieldWarn,
+	},
+}
+```
+
 Codec authors can use `codec/conformance.Run` from their codec's `_test.go`
 files to check the shared Decode, Session, round-trip, lineage, and I/O error
 contract. Keep format-specific preservation behavior in the codec's own tests.
