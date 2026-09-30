@@ -1,15 +1,13 @@
 package bubbletea
 
-import "github.com/yuyosy/structivedit/document"
-
-func (model *Model) hitTest(x, y int) (document.NodeID, bool) {
+func (model *Model) hitTest(x, y int) (hitRegion, bool) {
 	if model == nil || x < 0 || y < 0 {
-		return 0, false
+		return hitRegion{}, false
 	}
 	for _, region := range model.hitRegions {
 		if region.line == y {
-			return region.nodeID, true
+			return region, true
 		}
 	}
-	return 0, false
+	return hitRegion{}, false
 }

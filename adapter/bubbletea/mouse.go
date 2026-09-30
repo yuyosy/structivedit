@@ -19,14 +19,20 @@ func (model *Model) handleMouseClick(message tea.MouseClickMsg) {
 		model.lastClick = mouseClickState{}
 		return
 	}
-	id, ok := model.hitTest(message.X, message.Y)
+	region, ok := model.hitTest(message.X, message.Y)
 	if !ok {
 		model.lastClick = mouseClickState{}
 		return
 	}
-	model.focus(id)
+	model.focus(region.nodeID)
 	if model.mode != browseMode {
 		model.lastClick = mouseClickState{}
+		return
+	}
+	foldArea := region.foldable && message.X >= region.foldStart && message.X < region.foldEnd
+	if foldArea {
+		model.lastClick = mouseClickState{}
+		model.enterFocused()
 		return
 	}
 	if !model.mouseDoubleClick {
@@ -36,12 +42,12 @@ func (model *Model) handleMouseClick(message tea.MouseClickMsg) {
 
 	now := time.Now()
 	elapsed := now.Sub(model.lastClick.at)
-	if model.lastClick.nodeID == id && !model.lastClick.at.IsZero() && elapsed >= 0 && elapsed <= doubleClickInterval {
+	if model.lastClick.nodeID == region.nodeID && !model.lastClick.at.IsZero() && elapsed >= 0 && elapsed <= doubleClickInterval {
 		model.lastClick = mouseClickState{}
-		model.handleMouseDoubleClick(id)
+		model.handleMouseDoubleClick(region.nodeID)
 		return
 	}
-	model.lastClick = mouseClickState{nodeID: id, at: now}
+	model.lastClick = mouseClickState{nodeID: region.nodeID, at: now}
 }
 
 func (model *Model) handleMouseDoubleClick(id document.NodeID) {

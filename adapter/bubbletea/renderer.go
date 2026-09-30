@@ -363,7 +363,12 @@ func (model *Model) render() tea.View {
 		}
 		lines = append(lines, model.renderStyledLine(width, segments...))
 		if row.focusable {
-			model.hitRegions = append(model.hitRegions, hitRegion{line: len(lines) - 1, nodeID: row.nodeID})
+			region := hitRegion{line: len(lines) - 1, nodeID: row.nodeID, foldable: row.hasChild}
+			if row.hasChild {
+				region.foldStart = 1 + 2*row.depth
+				region.foldEnd = region.foldStart + 2
+			}
+			model.hitRegions = append(model.hitRegions, region)
 		}
 	}
 	for len(lines)-3 < count {

@@ -61,8 +61,11 @@ type treeRow struct {
 }
 
 type hitRegion struct {
-	line   int
-	nodeID document.NodeID
+	line      int
+	nodeID    document.NodeID
+	foldStart int
+	foldEnd   int
+	foldable  bool
 }
 
 // Model is a Bubble Tea model that displays and edits an Editor's Document.
