@@ -252,7 +252,11 @@ func (model *Model) render() tea.View {
 		state = "Modified"
 		stateStyle = model.styles.modified
 	}
-	issueCountText := fmt.Sprintf("%d issues", issueCount)
+	issueLabel := "issues"
+	if issueCount == 1 {
+		issueLabel = "issue"
+	}
+	issueCountText := fmt.Sprintf("%d %s", issueCount, issueLabel)
 	issueCountStyle := model.styles.muted
 	if issueCount > 0 {
 		issueCountStyle = model.styles.error
@@ -266,22 +270,21 @@ func (model *Model) render() tea.View {
 		lineSegment{text: " | ", style: model.styles.plain},
 		lineSegment{text: fmt.Sprintf("Cursor: %s | %d visible rows", cursorModeText, len(rows)), style: model.styles.muted},
 	))
-	statusSegments := make([]lineSegment, 0, 8)
-	if model.message != "" {
-		messageStyle := model.styles.info
-		if model.messageError {
-			messageStyle = model.styles.error
-		}
-		statusSegments = append(statusSegments,
-			lineSegment{text: model.message, style: messageStyle},
-			lineSegment{text: " | ", style: model.styles.muted},
-		)
+	context := model.statusContext()
+	contextStyle := model.styles.muted
+	if model.message != "" && model.message != "Saved" {
+		contextStyle = model.styles.info
 	}
-	statusSegments = append(statusSegments,
-		lineSegment{text: state, style: stateStyle},
-		lineSegment{text: " | ", style: model.styles.muted},
-		lineSegment{text: issueCountText, style: issueCountStyle},
-	)
+	if model.messageError {
+		contextStyle = model.styles.error
+	}
+	statusSegments := []lineSegment{
+		{text: "[" + state + "]", style: stateStyle},
+		{text: " | ", style: model.styles.muted},
+		{text: issueCountText, style: issueCountStyle},
+		{text: " | ", style: model.styles.muted},
+		{text: context, style: contextStyle},
+	}
 	lines = append(lines, model.renderStyledLine(width, statusSegments...))
 	lines = append(lines, model.renderStyledLine(width,
 		lineSegment{text: strings.Repeat("─", width), style: model.styles.muted},
@@ -366,6 +369,30 @@ func (model *Model) render() tea.View {
 	view.AltScreen = true
 	view.MouseMode = tea.MouseModeCellMotion
 	return view
+}
+
+func (model *Model) statusContext() string {
+	context := "Ready"
+	switch model.mode {
+	case editMode:
+		context = "Editing"
+		if model.inlineEditing {
+			context = "Editing inline"
+		}
+	case addFieldMode:
+		context = "Adding field"
+	case addValueMode:
+		context = "Adding value"
+	case deleteConfirmMode:
+		context = "Confirm delete"
+	}
+	if model.message == "" || model.message == "Saved" {
+		return context
+	}
+	if model.mode == browseMode {
+		return model.message
+	}
+	return context + " · " + model.message
 }
 
 func (model *Model) inputAreaLines(width int) [][]lineSegment {
