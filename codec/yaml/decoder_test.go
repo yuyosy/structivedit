@@ -6,7 +6,69 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/yuyosy/structivedit/codec"
+	"github.com/yuyosy/structivedit/codec/conformance"
+	"github.com/yuyosy/structivedit/document"
 )
+
+func TestCodecConformance(t *testing.T) {
+	expected := conformanceDocument(t)
+	conformance.Run(t, func() codec.Codec { return Codec{} }, conformance.Sample{
+		Input:    []byte("name: editor\nenabled: true\nretries: 3\nratio: 1.5\nempty: null\nitems:\n  - alpha\n  - beta\nnested:\n  active: false\n"),
+		Expected: expected,
+	})
+}
+
+func conformanceDocument(t *testing.T) *document.Document {
+	t.Helper()
+	builder := document.NewBuilder()
+	newScalar := func(value any) document.NodeID {
+		t.Helper()
+		id, err := builder.NewScalar(value)
+		if err != nil {
+			t.Fatalf("create conformance scalar: %v", err)
+		}
+		return id
+	}
+	newMapping := func(keys []string, values []document.NodeID) document.NodeID {
+		t.Helper()
+		entries := make([]document.MappingEntry, len(keys))
+		for index, key := range keys {
+			entries[index] = document.MappingEntry{Key: newScalar(key), Value: values[index]}
+		}
+		id, err := builder.NewMapping(entries)
+		if err != nil {
+			t.Fatalf("create conformance mapping: %v", err)
+		}
+		return id
+	}
+	items, err := builder.NewSequence([]document.NodeID{newScalar("alpha"), newScalar("beta")})
+	if err != nil {
+		t.Fatalf("create conformance sequence: %v", err)
+	}
+	nested := newMapping([]string{"active"}, []document.NodeID{newScalar(false)})
+	root := newMapping(
+		[]string{"name", "enabled", "retries", "ratio", "empty", "items", "nested"},
+		[]document.NodeID{
+			newScalar("editor"),
+			newScalar(true),
+			newScalar(int64(3)),
+			newScalar(float64(1.5)),
+			newScalar(nil),
+			items,
+			nested,
+		},
+	)
+	if err := builder.SetRoot(root); err != nil {
+		t.Fatalf("set conformance root: %v", err)
+	}
+	doc, err := builder.Build()
+	if err != nil {
+		t.Fatalf("build conformance Document: %v", err)
+	}
+	return doc
+}
 
 func TestDecodeWithOptionsEnforcesLimits(t *testing.T) {
 	tests := []struct {

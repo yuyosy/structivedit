@@ -70,7 +70,7 @@ func BenchmarkEditorViewsCached(b *testing.B) {
 	editor.Views()
 	b.ReportAllocs()
 	b.ResetTimer()
-	for iteration := 0; iteration < b.N; iteration++ {
+	for b.Loop() {
 		editor.Views()
 	}
 }
@@ -79,7 +79,7 @@ func BenchmarkEditorViewsCold(b *testing.B) {
 	doc := makeBenchmarkDocument(b, 2048)
 	b.ReportAllocs()
 	b.ResetTimer()
-	for iteration := 0; iteration < b.N; iteration++ {
+	for b.Loop() {
 		editor, err := New(doc)
 		if err != nil {
 			b.Fatal(err)

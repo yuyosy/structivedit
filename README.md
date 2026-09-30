@@ -134,6 +134,10 @@ arraySchema := schema.Node{
 Schemas are copied and validated when an Editor is created. Schema cycles are
 rejected.
 
+Codec authors can use `codec/conformance.Run` from their codec's `_test.go`
+files to check the shared Decode, Session, round-trip, lineage, and I/O error
+contract. Keep format-specific preservation behavior in the codec's own tests.
+
 ## YAML preservation
 
 The codec reads one YAML 1.2 Core Schema document and preserves the semantic
