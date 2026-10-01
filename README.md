@@ -266,3 +266,8 @@ go test ./...
 ```
 
 GitHub Actions tests and builds with Go 1.27 and the current stable Go release.
+
+
+## License
+
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
