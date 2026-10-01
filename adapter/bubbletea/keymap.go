@@ -1,6 +1,7 @@
 package bubbletea
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -21,6 +22,8 @@ func (model *Model) handleKey(key tea.Key) (tea.Model, tea.Cmd) {
 		model.handleAddValueKey(key)
 	case deleteConfirmMode:
 		model.handleDeleteKey(key)
+	case saveConflictMode:
+		model.handleSaveConflictKey(key)
 	default:
 		return model.handleBrowseKey(key)
 	}
@@ -543,10 +546,31 @@ func (model *Model) save() {
 		return
 	}
 	if err := model.saveHandler(); err != nil {
+		if errors.Is(err, ErrSaveConflict) && model.saveConflictHandler != nil {
+			model.mode = saveConflictMode
+			model.setErrorMessage("The file changed outside the editor")
+			return
+		}
 		model.fail(err)
 		return
 	}
 	model.setMessage("Saved")
+}
+
+func (model *Model) handleSaveConflictKey(key tea.Key) {
+	if key.Code == tea.KeyEscape {
+		model.cancelSaveConflict()
+		return
+	}
+	if key.Mod != 0 {
+		return
+	}
+	switch strings.ToLower(key.Text) {
+	case "o":
+		model.resolveSaveConflict(SaveConflictOverwrite)
+	case "r":
+		model.resolveSaveConflict(SaveConflictReload)
+	}
 }
 
 func (model *Model) fail(err error) {
@@ -576,7 +600,7 @@ func (model *Model) inputAreaLineCount() int {
 		return 2
 	case addFieldMode, addValueMode:
 		return 2
-	case deleteConfirmMode:
+	case deleteConfirmMode, saveConflictMode:
 		return 1
 	default:
 		return 0

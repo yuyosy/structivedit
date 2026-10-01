@@ -416,6 +416,8 @@ func (model *Model) statusContext() string {
 		context = "Adding value"
 	case deleteConfirmMode:
 		context = "Confirm delete"
+	case saveConflictMode:
+		context = "Resolve file change"
 	}
 	if model.message == "" || model.message == "Saved" {
 		return context
@@ -484,6 +486,12 @@ func (model *Model) inputAreaLines(width int) [][]lineSegment {
 			{text: " Delete ", style: model.styles.inputLabel},
 			{text: model.currentDeletePath(), style: model.styles.inputPath},
 			{text: "?  " + choice + "  (Tab changes, Enter selects, Esc cancels)", style: model.styles.inputLabel},
+		}
+		return [][]lineSegment{model.fullWidthLine(width, segments, model.styles.contextArea)}
+	case saveConflictMode:
+		segments := []lineSegment{
+			{text: " File changed outside the editor. ", style: model.styles.inputLabel},
+			{text: "[o] Overwrite  [r] Reload and discard  [Esc] Cancel", style: model.styles.inputPath},
 		}
 		return [][]lineSegment{model.fullWidthLine(width, segments, model.styles.contextArea)}
 	default:
@@ -877,6 +885,13 @@ func (model *Model) keyboardHelpLineCount() int {
 }
 
 func (model *Model) keyboardHelpLines(width int) [][]lineSegment {
+	if model.mode == saveConflictMode {
+		return [][]lineSegment{model.compactShortcutLine(width, [][2]string{
+			{"o", "overwrite"},
+			{"r", "reload"},
+			{"Esc", "cancel"},
+		}, false)}
+	}
 	if model.mode == editMode {
 		shortcuts := [][2]string{
 			{"←/→", " cursor"},

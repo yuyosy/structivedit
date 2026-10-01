@@ -23,8 +23,11 @@ go run ./cmd/structivedit [--expand-aliases] [--no-color] [--inline-edit] config
 The CLI opens one existing file. It writes only after Ctrl+S. Press `q` or
 Escape to leave the editor; if the document is dirty, choose discard or return
 to editing. Ctrl+S errors stay visible in the editor and do not clear dirty
-state. `--expand-aliases` displays alias targets as read-only rows. `--no-color`
-disables colors; the `NO_COLOR` environment variable does the same.
+state. Before saving, the CLI checks whether the file changed since it was
+opened. If it did, press `o` to overwrite the file, `r` to reload it and discard
+local edits, or Escape to cancel the save. `--expand-aliases` displays alias
+targets as read-only rows. `--no-color` disables colors; the `NO_COLOR`
+environment variable does the same.
 `--inline-edit` edits scalar values directly in their tree rows instead of in
 the dedicated input area. Press Enter to apply an inline edit or Escape to
 cancel it.

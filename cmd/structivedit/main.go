@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"errors"
 	"flag"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	structivedit "github.com/yuyosy/structivedit"
 	"github.com/yuyosy/structivedit/adapter/bubbletea"
+	"github.com/yuyosy/structivedit/codec"
 	yamlcodec "github.com/yuyosy/structivedit/codec/yaml"
 )
 
@@ -40,22 +42,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return fmt.Errorf("usage: structivedit [--expand-aliases] [--no-color] [--inline-edit] <file.yaml>")
 	}
 	path := files[0]
-	file, err := os.Open(path)
+	session, fileMode, sourceHash, err := loadFile(path)
 	if err != nil {
-		return fmt.Errorf("open %s: %w", path, err)
-	}
-	fileInfo, err := file.Stat()
-	if err != nil {
-		_ = file.Close()
-		return fmt.Errorf("stat %s: %w", path, err)
-	}
-	session, decodeErr := yamlcodec.Decode(file)
-	closeErr := file.Close()
-	if decodeErr != nil {
-		return fmt.Errorf("decode %s: %w", path, decodeErr)
-	}
-	if closeErr != nil {
-		return fmt.Errorf("close %s: %w", path, closeErr)
+		return err
 	}
 	policy := structivedit.Policy{
 		Default: structivedit.ScopePolicy{
@@ -74,16 +63,67 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		bubbletea.WithColors(!noColor),
 		bubbletea.WithInlineEditing(inlineEdit),
 	)
-	model.SetSaveHandler(func() error {
+	encodeCurrent := func() ([]byte, error) {
 		var encoded bytes.Buffer
 		if err := session.Encode(&encoded, editor.Document()); err != nil {
-			return fmt.Errorf("encode %s: %w", path, err)
+			return nil, fmt.Errorf("encode %s: %w", path, err)
 		}
-		if err := os.WriteFile(path, encoded.Bytes(), fileInfo.Mode().Perm()); err != nil {
+		return encoded.Bytes(), nil
+	}
+	writeEncoded := func(encoded []byte) error {
+		if err := os.WriteFile(path, encoded, fileMode); err != nil {
 			return fmt.Errorf("write %s: %w", path, err)
 		}
+		sourceHash = sha256.Sum256(encoded)
 		editor.MarkClean()
 		return nil
+	}
+	writeCurrent := func() error {
+		encoded, err := encodeCurrent()
+		if err != nil {
+			return err
+		}
+		return writeEncoded(encoded)
+	}
+	model.SetSaveHandler(func() error {
+		encoded, err := encodeCurrent()
+		if err != nil {
+			return err
+		}
+		changed, err := fileChanged(path, sourceHash)
+		if err != nil {
+			return fmt.Errorf("check %s before save: %w", path, err)
+		}
+		if changed {
+			return bubbletea.ErrSaveConflict
+		}
+		return writeEncoded(encoded)
+	})
+	model.SetSaveConflictHandler(func(action bubbletea.SaveConflictAction) (*structivedit.Editor, error) {
+		switch action {
+		case bubbletea.SaveConflictOverwrite:
+			if err := writeCurrent(); err != nil {
+				return nil, err
+			}
+			return nil, nil
+		case bubbletea.SaveConflictReload:
+			reloadedSession, reloadedMode, reloadedHash, err := loadFile(path)
+			if err != nil {
+				return nil, err
+			}
+			reloadedEditor, err := structivedit.New(reloadedSession.Document(), structivedit.WithPolicy(policy))
+			if err != nil {
+				return nil, fmt.Errorf("create editor from %s: %w", path, err)
+			}
+			reloadedEditor.MarkClean()
+			session = reloadedSession
+			fileMode = reloadedMode
+			sourceHash = reloadedHash
+			editor = reloadedEditor
+			return reloadedEditor, nil
+		default:
+			return nil, fmt.Errorf("unknown save conflict action: %d", action)
+		}
 	})
 
 	reader := bufio.NewReader(stdin)
@@ -107,6 +147,52 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			return nil
 		}
 	}
+}
+
+func loadFile(path string) (codec.Session, os.FileMode, [sha256.Size]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, 0, [sha256.Size]byte{}, fmt.Errorf("open %s: %w", path, err)
+	}
+	fileInfo, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, 0, [sha256.Size]byte{}, fmt.Errorf("stat %s: %w", path, err)
+	}
+	digest := sha256.New()
+	session, decodeErr := yamlcodec.Decode(io.TeeReader(file, digest))
+	closeErr := file.Close()
+	if decodeErr != nil {
+		return nil, 0, [sha256.Size]byte{}, fmt.Errorf("decode %s: %w", path, decodeErr)
+	}
+	if closeErr != nil {
+		return nil, 0, [sha256.Size]byte{}, fmt.Errorf("close %s: %w", path, closeErr)
+	}
+	var sourceHash [sha256.Size]byte
+	copy(sourceHash[:], digest.Sum(nil))
+	return session, fileInfo.Mode().Perm(), sourceHash, nil
+}
+
+func fileChanged(path string, expected [sha256.Size]byte) (bool, error) {
+	file, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	digest := sha256.New()
+	_, readErr := io.Copy(digest, file)
+	closeErr := file.Close()
+	if readErr != nil {
+		return false, readErr
+	}
+	if closeErr != nil {
+		return false, closeErr
+	}
+	var actual [sha256.Size]byte
+	copy(actual[:], digest.Sum(nil))
+	return actual != expected, nil
 }
 
 func confirmExit(input *bufio.Reader, output io.Writer) (bool, error) {

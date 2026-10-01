@@ -15,6 +15,7 @@ const (
 	addFieldMode
 	addValueMode
 	deleteConfirmMode
+	saveConflictMode
 )
 
 type cursorMode uint8
@@ -72,30 +73,31 @@ type hitRegion struct {
 // File I/O stays with the caller; SetSaveHandler connects an explicit save key
 // to the caller's persistence logic.
 type Model struct {
-	editor            *structivedit.Editor
-	mode              mode
-	cursorMode        cursorMode
-	expanded          map[document.NodeID]bool
-	edit              editBuffer
-	add               addPrompt
-	delete            deletePrompt
-	viewport          viewport
-	width             int
-	height            int
-	message           string
-	messageError      bool
-	saveHandler       func() error
-	hitRegions        []hitRegion
-	lastClick         mouseClickState
-	inputCursorX      int
-	inputCursorY      int
-	inputCursorInTree bool
-	showAllShortcuts  bool
-	expandAliases     bool
-	colorsEnabled     bool
-	inlineEditing     bool
-	mouseDoubleClick  bool
-	styles            terminalStyles
+	editor              *structivedit.Editor
+	mode                mode
+	cursorMode          cursorMode
+	expanded            map[document.NodeID]bool
+	edit                editBuffer
+	add                 addPrompt
+	delete              deletePrompt
+	viewport            viewport
+	width               int
+	height              int
+	message             string
+	messageError        bool
+	saveHandler         func() error
+	saveConflictHandler SaveConflictHandler
+	hitRegions          []hitRegion
+	lastClick           mouseClickState
+	inputCursorX        int
+	inputCursorY        int
+	inputCursorInTree   bool
+	showAllShortcuts    bool
+	expandAliases       bool
+	colorsEnabled       bool
+	inlineEditing       bool
+	mouseDoubleClick    bool
+	styles              terminalStyles
 }
 
 // NewModel creates a terminal model for editor. Containers at the root and
@@ -152,10 +154,37 @@ func (model *Model) clearMessage() {
 
 // SetSaveHandler registers the caller's persistence function for Ctrl+S.
 // The handler should call Editor.MarkClean only after encoding and writing
-// have both succeeded.
+// have both succeeded. If it returns ErrSaveConflict and a conflict handler is
+// registered, Model asks the user whether to overwrite, reload, or cancel.
 func (model *Model) SetSaveHandler(handler func() error) {
 	if model != nil {
 		model.saveHandler = handler
+	}
+}
+
+func (model *Model) replaceEditor(editor *structivedit.Editor) {
+	if model == nil || editor == nil {
+		return
+	}
+	model.editor = editor
+	model.mode = browseMode
+	model.cursorMode = rowHeadCursor
+	model.expanded = make(map[document.NodeID]bool)
+	model.edit = editBuffer{}
+	model.add = addPrompt{}
+	model.delete = deletePrompt{}
+	model.viewport = viewport{}
+	model.hitRegions = nil
+	model.lastClick = mouseClickState{}
+	model.showAllShortcuts = false
+	model.inputCursorX = -1
+	model.inputCursorY = -1
+	model.inputCursorInTree = false
+	root := editor.Document().Root()
+	if root != 0 {
+		_ = editor.Focus(root)
+		model.expandInitial(root, 0)
+		model.expandInitialAliases()
 	}
 }
 
@@ -192,9 +221,13 @@ func (model *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return model.handleKey(typed.Key())
 	case tea.MouseClickMsg:
-		model.handleMouseClick(typed)
+		if model.mode != saveConflictMode {
+			model.handleMouseClick(typed)
+		}
 	case tea.MouseWheelMsg:
-		model.handleMouseWheel(typed)
+		if model.mode != saveConflictMode {
+			model.handleMouseWheel(typed)
+		}
 	}
 	return model, nil
 }
