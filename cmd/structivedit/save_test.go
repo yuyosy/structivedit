@@ -6,20 +6,46 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
 func TestAtomicSaveFailurePreservesOriginal(t *testing.T) {
+	t.Run("original path", func(t *testing.T) {
+		testAtomicSaveFailurePreservesOriginal(t, false)
+	})
+	if runtime.GOOS == "windows" {
+		t.Run("case variant path", func(t *testing.T) {
+			testAtomicSaveFailurePreservesOriginal(t, true)
+		})
+	}
+}
+
+func testAtomicSaveFailurePreservesOriginal(t *testing.T, caseVariant bool) {
+	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(path, []byte("old\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	if caseVariant {
+		path = strings.ToUpper(path)
+	}
+	original, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	wantErr := errors.New("replacement failed")
-	err := atomicWriteFile(path, []byte("new\n"), 0600, func(from, to string) error {
+	err = atomicWriteFile(path, []byte("new\n"), 0600, func(from, to string) error {
 		content, err := os.ReadFile(from)
-		if err != nil || string(content) != "new\n" || to != path {
-			t.Fatalf("prepared replacement: %q %s %v", content, to, err)
+		if err != nil || string(content) != "new\n" {
+			t.Fatalf("prepared content: %q, error: %v", content, err)
+		}
+		// EvalSymlinks can normalize Windows casing and short path names.
+		// Verify file identity rather than requiring identical path strings.
+		destination, err := os.Stat(to)
+		if err != nil || !os.SameFile(original, destination) {
+			t.Fatalf("prepared destination %q differs from %q: %v", to, path, err)
 		}
 		return wantErr
 	})
