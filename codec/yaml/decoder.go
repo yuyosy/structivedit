@@ -34,7 +34,9 @@ var (
 // Codec implements codec.Codec for one YAML 1.2 Core Schema document.
 type Codec struct{}
 
-// DecodeOptions bounds resources consumed while reading a YAML document.
+// DecodeOptions bounds input bytes and the accepted document's structure.
+// MaxNodes and MaxDepth are checked after the YAML parser constructs its tree;
+// combine them with MaxInputBytes to bound the parser's input allocation.
 // A zero limit is unlimited. MaxDepth counts the root node as depth one.
 type DecodeOptions struct {
 	MaxInputBytes int64

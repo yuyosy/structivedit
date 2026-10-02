@@ -31,18 +31,25 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	var expandAliases bool
 	var noColor bool
 	var inlineEdit bool
+	decodeOptions := defaultDecodeOptions()
 	flags.BoolVar(&expandAliases, "expand-aliases", false, "show alias contents as read-only rows")
 	flags.BoolVar(&noColor, "no-color", false, "disable terminal colors")
 	flags.BoolVar(&inlineEdit, "inline-edit", false, "edit scalar values in their tree rows")
+	flags.Int64Var(&decodeOptions.MaxInputBytes, "max-input-bytes", decodeOptions.MaxInputBytes, "maximum YAML input bytes (0 is unlimited)")
+	flags.IntVar(&decodeOptions.MaxNodes, "max-nodes", decodeOptions.MaxNodes, "maximum document nodes (0 is unlimited)")
+	flags.IntVar(&decodeOptions.MaxDepth, "max-depth", decodeOptions.MaxDepth, "maximum document nesting depth (0 is unlimited)")
 	if err := flags.Parse(args); err != nil {
 		return fmt.Errorf("%w\nusage: structivedit [--expand-aliases] [--no-color] [--inline-edit] <file.yaml>", err)
 	}
 	files := flags.Args()
+	if decodeOptions.MaxInputBytes < 0 || decodeOptions.MaxNodes < 0 || decodeOptions.MaxDepth < 0 {
+		return yamlcodec.ErrInvalidDecodeOptions
+	}
 	if len(files) != 1 || files[0] == "" {
 		return fmt.Errorf("usage: structivedit [--expand-aliases] [--no-color] [--inline-edit] <file.yaml>")
 	}
 	path := files[0]
-	session, fileMode, sourceHash, err := loadFile(path)
+	session, fileMode, sourceHash, err := loadFileWithOptions(path, decodeOptions)
 	if err != nil {
 		return err
 	}
@@ -90,7 +97,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
-		changed, err := fileChanged(path, sourceHash)
+		changed, err := fileChangedWithLimit(path, sourceHash, decodeOptions.MaxInputBytes)
 		if err != nil {
 			return fmt.Errorf("check %s before save: %w", path, err)
 		}
@@ -107,7 +114,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			}
 			return nil, nil
 		case bubbletea.SaveConflictReload:
-			reloadedSession, reloadedMode, reloadedHash, err := loadFile(path)
+			reloadedSession, reloadedMode, reloadedHash, err := loadFileWithOptions(path, decodeOptions)
 			if err != nil {
 				return nil, err
 			}
@@ -150,6 +157,14 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 }
 
 func loadFile(path string) (codec.Session, os.FileMode, [sha256.Size]byte, error) {
+	return loadFileWithOptions(path, defaultDecodeOptions())
+}
+
+func defaultDecodeOptions() yamlcodec.DecodeOptions {
+	return yamlcodec.DecodeOptions{MaxInputBytes: 8 << 20, MaxNodes: 100000, MaxDepth: 128}
+}
+
+func loadFileWithOptions(path string, options yamlcodec.DecodeOptions) (codec.Session, os.FileMode, [sha256.Size]byte, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, 0, [sha256.Size]byte{}, fmt.Errorf("open %s: %w", path, err)
@@ -159,8 +174,12 @@ func loadFile(path string) (codec.Session, os.FileMode, [sha256.Size]byte, error
 		_ = file.Close()
 		return nil, 0, [sha256.Size]byte{}, fmt.Errorf("stat %s: %w", path, err)
 	}
+	if !fileInfo.Mode().IsRegular() {
+		_ = file.Close()
+		return nil, 0, [sha256.Size]byte{}, fmt.Errorf("%s is not a regular file", path)
+	}
 	digest := sha256.New()
-	session, decodeErr := yamlcodec.Decode(io.TeeReader(file, digest))
+	session, decodeErr := yamlcodec.DecodeWithOptions(io.TeeReader(file, digest), options)
 	closeErr := file.Close()
 	if decodeErr != nil {
 		return nil, 0, [sha256.Size]byte{}, fmt.Errorf("decode %s: %w", path, decodeErr)
@@ -174,6 +193,10 @@ func loadFile(path string) (codec.Session, os.FileMode, [sha256.Size]byte, error
 }
 
 func fileChanged(path string, expected [sha256.Size]byte) (bool, error) {
+	return fileChangedWithLimit(path, expected, 0)
+}
+
+func fileChangedWithLimit(path string, expected [sha256.Size]byte, maxBytes int64) (bool, error) {
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return true, nil
@@ -182,13 +205,20 @@ func fileChanged(path string, expected [sha256.Size]byte) (bool, error) {
 		return false, err
 	}
 	digest := sha256.New()
-	_, readErr := io.Copy(digest, file)
+	reader := io.Reader(file)
+	if maxBytes > 0 && maxBytes < int64(^uint64(0)>>1) {
+		reader = io.LimitReader(file, maxBytes+1)
+	}
+	count, readErr := io.Copy(digest, reader)
 	closeErr := file.Close()
 	if readErr != nil {
 		return false, readErr
 	}
 	if closeErr != nil {
 		return false, closeErr
+	}
+	if maxBytes > 0 && count > maxBytes {
+		return true, nil
 	}
 	var actual [sha256.Size]byte
 	copy(actual[:], digest.Sum(nil))

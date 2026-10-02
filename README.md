@@ -44,6 +44,13 @@ change prompt.
 | `--expand-aliases` | Show alias targets as read-only rows |
 | `--inline-edit` | Edit scalar values in their tree rows |
 | `--no-color` | Disable terminal colors; `NO_COLOR` has the same effect |
+| `--max-input-bytes` | Maximum input size; default 8 MiB |
+| `--max-nodes` | Maximum accepted node count; default 100,000 |
+| `--max-depth` | Maximum accepted nesting depth; default 128 |
+
+Resource limits also apply when reloading. Set a limit to `0` for trusted input
+that needs unlimited behavior. Node and depth limits are checked after YAML
+parsing; the byte limit bounds the parser's input size.
 
 | Key | Behavior |
 |---|---|
@@ -242,6 +249,9 @@ nodes or tag payloads return errors rather than being silently discarded.
 For untrusted input, use `yamlcodec.DecodeWithOptions` to limit input bytes,
 node count, or nesting depth. A zero limit is unlimited. `yamlcodec.Decode`
 keeps unlimited behavior for compatibility.
+
+Node and depth checks happen after the YAML parser builds its tree, so combine
+them with a byte limit. The reference CLI enables all three limits by default.
 
 ## Implementing another codec
 
