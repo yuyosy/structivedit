@@ -71,7 +71,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return encoded.Bytes(), nil
 	}
 	writeEncoded := func(encoded []byte) error {
-		if err := os.WriteFile(path, encoded, fileMode); err != nil {
+		if err := writeFileAtomically(path, encoded, fileMode); err != nil {
 			return fmt.Errorf("write %s: %w", path, err)
 		}
 		sourceHash = sha256.Sum256(encoded)
