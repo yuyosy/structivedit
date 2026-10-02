@@ -94,6 +94,11 @@ type Model struct {
 	inputCursorInTree   bool
 	showAllShortcuts    bool
 	expandAliases       bool
+	aliasRowLimit       int
+	rowCacheDocument    *document.Document
+	rowCacheExpanded    map[document.NodeID]bool
+	rowCacheIssues      []structivedit.ValidationIssue
+	rowCache            []treeRow
 	colorsEnabled       bool
 	inlineEditing       bool
 	mouseDoubleClick    bool
@@ -103,7 +108,7 @@ type Model struct {
 // NewModel creates a terminal model for editor. Containers at the root and
 // one level below it start expanded; deeper content can be opened as needed.
 func NewModel(editor *structivedit.Editor, options ...ModelOption) *Model {
-	settings := modelOptions{colors: true, mouseDoubleClick: true}
+	settings := modelOptions{colors: true, mouseDoubleClick: true, aliasRowLimit: 10000}
 	for _, option := range options {
 		if option != nil {
 			option(&settings)
@@ -115,6 +120,7 @@ func NewModel(editor *structivedit.Editor, options ...ModelOption) *Model {
 		width:            100,
 		height:           24,
 		expandAliases:    settings.expandAliases,
+		aliasRowLimit:    settings.aliasRowLimit,
 		colorsEnabled:    settings.colors,
 		inlineEditing:    settings.inlineEditing,
 		mouseDoubleClick: settings.mouseDoubleClick,
@@ -167,6 +173,8 @@ func (model *Model) replaceEditor(editor *structivedit.Editor) {
 		return
 	}
 	model.editor = editor
+	model.rowCacheDocument = nil
+	model.rowCache = nil
 	model.mode = browseMode
 	model.cursorMode = rowHeadCursor
 	model.expanded = make(map[document.NodeID]bool)

@@ -88,39 +88,14 @@ func (model *Model) renderStyledLine(width int, segments ...lineSegment) string 
 	if width <= 0 {
 		return ""
 	}
-	length := 0
-	for _, segment := range segments {
-		length += len([]rune(segment.text))
-	}
-	truncated := length > width
-	if truncated && width == 1 {
-		return "…"
-	}
-	remaining := width
-	if truncated {
-		remaining--
-	}
-
 	colors := model.colorsActive()
 	var output strings.Builder
-	for _, segment := range segments {
-		if remaining == 0 {
-			break
-		}
-		runes := []rune(segment.text)
-		count := len(runes)
-		if count > remaining {
-			count = remaining
-		}
-		text := string(runes[:count])
+	for _, segment := range clipLineSegments(segments, width, model.styles.muted) {
+		text := terminalText(segment.text)
 		if colors {
 			text = segment.style.Render(text)
 		}
 		output.WriteString(text)
-		remaining -= count
-	}
-	if truncated {
-		output.WriteRune('…')
 	}
 	return output.String()
 }

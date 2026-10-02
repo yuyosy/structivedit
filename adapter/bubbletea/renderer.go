@@ -3,12 +3,15 @@ package bubbletea
 import (
 	"fmt"
 	"image/color"
+	"maps"
 	"math"
 	"strconv"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/rivo/uniseg"
 	"github.com/yuyosy/structivedit"
 	"github.com/yuyosy/structivedit/document"
 	"github.com/yuyosy/structivedit/schema"
@@ -20,16 +23,32 @@ func (model *Model) visibleRows() []treeRow {
 	if model == nil || model.editor == nil || model.editor.Document() == nil {
 		return nil
 	}
+	issues := model.editor.Issues()
+	if model.rowCacheDocument == model.editor.Document() && maps.Equal(model.rowCacheExpanded, model.expanded) && sameRowIssues(model.rowCacheIssues, issues) {
+		return model.rowCache
+	}
 	views := model.editor.Views()
 	byID := make(map[document.NodeID]structivedit.NodeView, len(views))
 	for _, view := range views {
 		byID[view.ID] = view
 	}
 	rows := make([]treeRow, 0, len(views))
+	aliasRows := 0
+	aliasLimited := false
 	var appendNode func(document.NodeID, int, string, bool, map[document.NodeID]bool)
 	appendNode = func(id document.NodeID, depth int, label string, readOnly bool, ancestors map[document.NodeID]bool) {
 		if id == 0 || ancestors[id] {
 			return
+		}
+		if readOnly {
+			if aliasRows >= model.aliasRowLimit {
+				if !aliasLimited {
+					rows = append(rows, treeRow{depth: depth, label: "… alias expansion limited"})
+					aliasLimited = true
+				}
+				return
+			}
+			aliasRows++
 		}
 		view, ok := byID[id]
 		if !ok {
@@ -98,7 +117,24 @@ func (model *Model) visibleRows() []treeRow {
 	}
 	root := model.editor.Document().Root()
 	appendNode(root, 0, "$", false, make(map[document.NodeID]bool))
+	model.rowCacheDocument = model.editor.Document()
+	model.rowCacheExpanded = maps.Clone(model.expanded)
+	model.rowCacheIssues = issues
+	model.rowCache = rows
 	return rows
+}
+
+func sameRowIssues(left, right []structivedit.ValidationIssue) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i, issue := range left {
+		other := right[i]
+		if issue.NodeID != other.NodeID || !issue.Path.Equal(other.Path) || issue.Code != other.Code || issue.Message != other.Message || issue.Severity != other.Severity {
+			return false
+		}
+	}
+	return true
 }
 
 func rowValue(doc *document.Document, view structivedit.NodeView) string {
@@ -388,6 +424,7 @@ func (model *Model) render() tea.View {
 	view.AltScreen = true
 	view.MouseMode = tea.MouseModeCellMotion
 	if model.inputCursorX >= 0 && model.inputCursorY >= 0 {
+		model.inputCursorX = min(model.inputCursorX, width-1)
 		cursor := tea.NewCursor(model.inputCursorX, model.inputCursorY)
 		cursor.Shape = tea.CursorBar
 		cursor.Blink = false
@@ -578,6 +615,7 @@ func (model *Model) multilineInputLine(width int, runes []rune, cursor int, acti
 }
 
 func inputSuffixWindow(value string, width int) string {
+	value = terminalText(value)
 	if width <= 0 || value == "" {
 		return ""
 	}
@@ -587,19 +625,25 @@ func inputSuffixWindow(value string, width int) string {
 	if width == 1 {
 		return "…"
 	}
-	runes := []rune(value)
-	start := len(runes)
+	parts := make([]string, 0)
+	graphemes := uniseg.NewGraphemes(value)
+	for graphemes.Next() {
+		parts = append(parts, graphemes.Str())
+	}
+	start, used := len(parts), 1
 	for start > 0 {
-		candidate := string(runes[start-1:])
-		if lipgloss.Width("…"+candidate) > width {
+		cells := ansi.StringWidth(parts[start-1])
+		if used+cells > width {
 			break
 		}
+		used += cells
 		start--
 	}
-	return "…" + string(runes[start:])
+	return "…" + strings.Join(parts[start:], "")
 }
 
 func inputPrefixWindow(value string, width int) string {
+	value = terminalText(value)
 	if width <= 0 || value == "" {
 		return ""
 	}
@@ -609,16 +653,7 @@ func inputPrefixWindow(value string, width int) string {
 	if width == 1 {
 		return "…"
 	}
-	runes := []rune(value)
-	end := 0
-	for end < len(runes) {
-		candidate := string(runes[:end+1])
-		if lipgloss.Width(candidate+"…") > width {
-			break
-		}
-		end++
-	}
-	return string(runes[:end]) + "…"
+	return ansi.Truncate(value, width, "…")
 }
 
 func padInputLine(segments []lineSegment, width int, background lipgloss.Style) []lineSegment {
@@ -662,7 +697,7 @@ func (model *Model) inlineInputSegments(input textInput, width int) ([]lineSegme
 func lineSegmentWidth(segments []lineSegment) int {
 	width := 0
 	for _, segment := range segments {
-		width += len([]rune(segment.text))
+		width += ansi.StringWidth(terminalText(segment.text))
 	}
 	return width
 }
@@ -671,58 +706,42 @@ func clipLineSegments(segments []lineSegment, width int, ellipsisStyle lipgloss.
 	if width <= 0 {
 		return nil
 	}
-	if lineSegmentWidth(segments) <= width {
+	truncated := lineSegmentWidth(segments) > width
+	if !truncated {
 		return segments
 	}
-	remaining := width - 1
+	remaining := width
+	if truncated {
+		remaining--
+	}
 	result := make([]lineSegment, 0, len(segments)+1)
 	for _, segment := range segments {
 		if remaining == 0 {
 			break
 		}
-		runes := []rune(segment.text)
-		if len(runes) > remaining {
-			runes = runes[:remaining]
+		text := terminalText(segment.text)
+		clipped := ansi.Truncate(text, remaining, "")
+		if clipped != "" {
+			result = append(result, lineSegment{text: clipped, style: segment.style})
 		}
-		if len(runes) > 0 {
-			result = append(result, lineSegment{text: string(runes), style: segment.style})
-			remaining -= len(runes)
+		remaining -= ansi.StringWidth(clipped)
+		if clipped != text {
+			break
 		}
 	}
-	return append(result, lineSegment{text: "…", style: ellipsisStyle})
+	if truncated {
+		result = append(result, lineSegment{text: "…", style: ellipsisStyle})
+	}
+	return result
 }
 
 func (model *Model) fullWidthLine(width int, segments []lineSegment, background lipgloss.Style) []lineSegment {
 	if width <= 0 {
 		return nil
 	}
-	length := 0
-	for _, segment := range segments {
-		length += len([]rune(segment.text))
-	}
-	limit := width
-	truncated := length > width
-	if truncated {
-		limit--
-	}
-	result := make([]lineSegment, 0, len(segments)+1)
-	remaining := limit
-	for _, segment := range segments {
-		if remaining == 0 {
-			break
-		}
-		runes := []rune(segment.text)
-		if len(runes) > remaining {
-			runes = runes[:remaining]
-		}
-		if len(runes) > 0 {
-			result = append(result, lineSegment{text: string(runes), style: segment.style})
-			remaining -= len(runes)
-		}
-	}
-	if truncated {
-		result = append(result, lineSegment{text: "…", style: background})
-	} else if remaining > 0 {
+	result := clipLineSegments(segments, width, background)
+	remaining := width - lineSegmentWidth(result)
+	if remaining > 0 {
 		result = append(result, lineSegment{text: strings.Repeat(" ", remaining), style: background})
 	}
 	return result
@@ -737,35 +756,19 @@ func inputWindow(input textInput, width int) (string, string) {
 	if position > len(runes) {
 		position = len(runes)
 	}
-	if width <= 0 || len(runes) <= width {
-		return string(runes[:position]), string(runes[position:])
+	if width <= 0 {
+		return "", ""
 	}
-	start := position - width/2
-	if start < 0 {
-		start = 0
+	before := displayInputText(runes[:position])
+	after := displayInputText(runes[position:])
+	if ansi.StringWidth(before+after) <= width {
+		return before, after
 	}
-	end := start + width
-	if end > len(runes) {
-		end = len(runes)
-		start = end - width
-	}
-	for end-start+(boolInt(start > 0))+boolInt(end < len(runes)) > width {
-		if end > position {
-			end--
-		} else if start < position {
-			start++
-		} else {
-			break
-		}
-	}
-	before := string(runes[start:position])
-	after := string(runes[position:end])
-	if start > 0 {
-		before = "…" + before
-	}
-	if end < len(runes) {
-		after += "…"
-	}
+	leftBudget := width / 2
+	left := inputSuffixWindow(before, leftBudget)
+	right := inputPrefixWindow(after, width-ansi.StringWidth(left))
+	left = inputSuffixWindow(before, width-ansi.StringWidth(right))
+	before, after = left, right
 	return before, after
 }
 
@@ -874,10 +877,7 @@ func isPathIdentifier(value string) bool {
 }
 
 func (model *Model) layoutWidth() int {
-	if model.width < 6 {
-		return 6
-	}
-	return model.width
+	return max(1, model.width)
 }
 
 func (model *Model) keyboardHelpLineCount() int {
@@ -1068,25 +1068,28 @@ func (model *Model) expandedShortcutLines(width int, shortcuts [][2]string) [][]
 }
 
 func wrapShortcutSegments(segments []lineSegment, width int) [][]lineSegment {
+	if width <= 0 {
+		return nil
+	}
 	lines := make([][]lineSegment, 0, len(segments))
 	current := make([]lineSegment, 0, len(segments))
 	currentWidth := 0
 	for _, segment := range segments {
-		runes := []rune(segment.text)
-		for len(runes) > 0 {
-			if currentWidth == width {
+		graphemes := uniseg.NewGraphemes(terminalText(segment.text))
+		for graphemes.Next() {
+			text := graphemes.Str()
+			cells := ansi.StringWidth(text)
+			if currentWidth > 0 && currentWidth+cells > width {
 				lines = append(lines, current)
 				current = make([]lineSegment, 0, len(segments))
 				currentWidth = 0
 			}
-			remaining := width - currentWidth
-			count := len(runes)
-			if count > remaining {
-				count = remaining
+			if cells > width {
+				text = "…"
+				cells = 1
 			}
-			current = append(current, lineSegment{text: string(runes[:count]), style: segment.style})
-			currentWidth += count
-			runes = runes[count:]
+			current = append(current, lineSegment{text: text, style: segment.style})
+			currentWidth += cells
 		}
 	}
 	if len(current) > 0 {
@@ -1103,7 +1106,7 @@ func appendShortcutSegments(segments []lineSegment, shortcut [2]string, keyStyle
 }
 
 func shortcutItemWidth(shortcut [2]string) int {
-	return len([]rune(shortcut[0])) + len([]rune(shortcut[1]))
+	return ansi.StringWidth(shortcut[0]) + ansi.StringWidth(shortcut[1])
 }
 
 func shortcutListWidth(shortcuts [][2]string, count int) int {

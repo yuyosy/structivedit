@@ -5,9 +5,17 @@ type ModelOption func(*modelOptions)
 
 type modelOptions struct {
 	expandAliases    bool
+	aliasRowLimit    int
 	colors           bool
 	inlineEditing    bool
 	mouseDoubleClick bool
+}
+
+// WithAliasRowLimit bounds projected alias rows per view. The default is
+// 10,000. A nonpositive limit hides projected contents. Ownership rows remain
+// accessible regardless of this limit.
+func WithAliasRowLimit(limit int) ModelOption {
+	return func(options *modelOptions) { options.aliasRowLimit = max(0, limit) }
 }
 
 // WithAliasExpansion displays the read-only contents of aliases that point to

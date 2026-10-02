@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
+	"github.com/rivo/uniseg"
 	"github.com/yuyosy/structivedit/document"
 	"github.com/yuyosy/structivedit/schema"
 )
@@ -42,7 +43,7 @@ func displayInputText(runes []rune) string {
 			output.WriteRune(character)
 		}
 	}
-	return output.String()
+	return terminalText(output.String())
 }
 
 func (input *textInput) handleKey(key tea.Key, multiline bool) bool {
@@ -53,21 +54,13 @@ func (input *textInput) handleKey(key tea.Key, multiline bool) bool {
 	switch key.Code {
 	case tea.KeyLeft:
 		if input.cursor > 0 {
-			if multiline && input.cursor >= 2 && input.runes[input.cursor-2] == '\r' && input.runes[input.cursor-1] == '\n' {
-				input.cursor -= 2
-			} else {
-				input.cursor--
-			}
+			input.cursor = input.previousBoundary()
 		}
 		input.resetVerticalMove()
 		return true
 	case tea.KeyRight:
 		if input.cursor < len(input.runes) {
-			if multiline && input.cursor+1 < len(input.runes) && input.runes[input.cursor] == '\r' && input.runes[input.cursor+1] == '\n' {
-				input.cursor += 2
-			} else {
-				input.cursor++
-			}
+			input.cursor = input.nextBoundary()
 		}
 		input.resetVerticalMove()
 		return true
@@ -105,10 +98,7 @@ func (input *textInput) handleKey(key tea.Key, multiline bool) bool {
 		return true
 	case tea.KeyBackspace:
 		if input.cursor > 0 {
-			removeStart := input.cursor - 1
-			if multiline && input.cursor >= 2 && input.runes[input.cursor-2] == '\r' && input.runes[input.cursor-1] == '\n' {
-				removeStart = input.cursor - 2
-			}
+			removeStart := input.previousBoundary()
 			input.runes = append(input.runes[:removeStart], input.runes[input.cursor:]...)
 			input.cursor = removeStart
 			input.touched = true
@@ -117,10 +107,7 @@ func (input *textInput) handleKey(key tea.Key, multiline bool) bool {
 		return true
 	case tea.KeyDelete:
 		if input.cursor < len(input.runes) {
-			removeEnd := input.cursor + 1
-			if multiline && input.cursor+1 < len(input.runes) && input.runes[input.cursor] == '\r' && input.runes[input.cursor+1] == '\n' {
-				removeEnd++
-			}
+			removeEnd := input.nextBoundary()
 			input.runes = append(input.runes[:input.cursor], input.runes[removeEnd:]...)
 			input.touched = true
 		}
@@ -138,6 +125,31 @@ func (input *textInput) insertNewline() {
 	if input != nil {
 		input.insert([]rune{'\n'})
 	}
+}
+
+func (input textInput) previousBoundary() int {
+	previous, position := 0, 0
+	graphemes := uniseg.NewGraphemes(input.String())
+	for graphemes.Next() {
+		position += len([]rune(graphemes.Str()))
+		if position >= input.cursor {
+			return previous
+		}
+		previous = position
+	}
+	return previous
+}
+
+func (input textInput) nextBoundary() int {
+	position := 0
+	graphemes := uniseg.NewGraphemes(input.String())
+	for graphemes.Next() {
+		position += len([]rune(graphemes.Str()))
+		if position > input.cursor {
+			return position
+		}
+	}
+	return len(input.runes)
 }
 
 func (input *textInput) insert(inserted []rune) {
@@ -229,12 +241,16 @@ func runeIndexAtCellColumn(runes []rune, column int) int {
 	if column <= 0 {
 		return 0
 	}
-	for index := 1; index <= len(runes); index++ {
-		if lipgloss.Width(displayInputText(runes[:index])) > column {
-			return index - 1
+	position, cells := 0, 0
+	graphemes := uniseg.NewGraphemes(string(runes))
+	for graphemes.Next() {
+		cells += lipgloss.Width(displayInputText([]rune(graphemes.Str())))
+		if cells > column {
+			return position
 		}
+		position += len([]rune(graphemes.Str()))
 	}
-	return len(runes)
+	return position
 }
 
 func scalarText(kind document.ScalarKind, value any) string {
