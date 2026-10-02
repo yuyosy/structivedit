@@ -1,9 +1,13 @@
 # StructiveEdit
 
 StructiveEdit is a Go library and reference terminal app for editing YAML as an
-ordered tree. The core editor, document model, codecs, and terminal UI are
-separate packages so applications can own persistence and choose which parts to
-embed.
+ordered tree. Schemas define valid document structure and values, while policies
+control which nodes users can edit, add, delete, or reorder.
+
+The core editor, document model, codecs, and terminal UI are separate packages,
+so applications can own persistence and choose which parts to embed.
+
+<img width="890" height="590" alt="demo" src="https://github.com/user-attachments/assets/d98f4f5a-4864-4a34-9ec1-75d9d73bb466" />
 
 ## Packages
 
