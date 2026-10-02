@@ -53,8 +53,8 @@ func canAddTo(doc *document.Document, id document.NodeID, compiled CompiledSchem
 		if shape.Kind != schema.ArrayKind {
 			return false
 		}
-		items, _ := doc.SequenceItems(id)
-		eligible = shape.Array.MaxItems == nil || len(items) < *shape.Array.MaxItems
+		count, _ := doc.SequenceLen(id)
+		eligible = shape.Array.MaxItems == nil || count < *shape.Array.MaxItems
 	case document.NodeMapping:
 		if shape.Kind != schema.ObjectKind {
 			return false
@@ -106,11 +106,11 @@ func canDelete(doc *document.Document, id document.NodeID, compiled CompiledSche
 		if shape == nil || containerShape == nil || containerShape.Kind != schema.ArrayKind {
 			return false
 		}
-		items, ok := doc.SequenceItems(parent.Parent)
+		count, ok := doc.SequenceLen(parent.Parent)
 		if !ok {
 			return false
 		}
-		eligible = containerShape.Array.MinItems == nil || len(items)-1 >= *containerShape.Array.MinItems
+		eligible = containerShape.Array.MinItems == nil || count-1 >= *containerShape.Array.MinItems
 	case document.ParentMappingValue:
 		containerShape := schemaNodeAt(doc, parent.Parent, compiled)
 		if containerShape == nil || containerShape.Kind != schema.ObjectKind {
@@ -120,11 +120,11 @@ func canDelete(doc *document.Document, id document.NodeID, compiled CompiledSche
 		if !exists {
 			return false
 		}
-		entries, ok := doc.MappingEntries(parent.Parent)
-		if !ok || parent.Index < 0 || parent.Index >= len(entries) || entries[parent.Index].Value != id {
+		entry, ok := doc.MappingEntryAt(parent.Parent, parent.Index)
+		if !ok || entry.Value != id {
 			return false
 		}
-		deletionRoots = append(deletionRoots, entries[parent.Index].Key)
+		deletionRoots = append(deletionRoots, entry.Key)
 		eligible = !field.Required
 	default:
 		return false
@@ -147,8 +147,8 @@ func canReorder(doc *document.Document, id document.NodeID, compiled CompiledSch
 	if !hasParent || parent.Role != document.ParentSequenceItem {
 		return false
 	}
-	items, ok := doc.SequenceItems(parent.Parent)
-	if !ok || len(items) < 2 {
+	count, ok := doc.SequenceLen(parent.Parent)
+	if !ok || count < 2 {
 		return false
 	}
 	shape := schemaNodeAt(doc, id, compiled)
@@ -175,21 +175,20 @@ func schemaNodeAt(doc *document.Document, id document.NodeID, compiled CompiledS
 			if currentSchema.Kind != schema.ArrayKind || currentSchema.Array.Item == nil {
 				return nil
 			}
-			items, ok := doc.SequenceItems(currentID)
-			if !ok || typed.Index() < 0 || typed.Index() >= len(items) {
+			item, ok := doc.SequenceItem(currentID, typed.Index())
+			if !ok {
 				return nil
 			}
 			currentSchema = currentSchema.Array.Item
-			currentID = items[typed.Index()]
+			currentID = item
 		case document.MappingEntrySegment:
 			if typed.Role() != document.MappingValueRole || currentSchema.Kind != schema.ObjectKind {
 				return nil
 			}
-			entries, ok := doc.MappingEntries(currentID)
-			if !ok || typed.EntryIndex() < 0 || typed.EntryIndex() >= len(entries) {
+			entry, ok := doc.MappingEntryAt(currentID, typed.EntryIndex())
+			if !ok {
 				return nil
 			}
-			entry := entries[typed.EntryIndex()]
 			kind, keyValue, scalar := doc.Scalar(entry.Key)
 			if scalar && kind == document.ScalarString {
 				if field, exists := schemaField(currentSchema.Object.Fields, keyValue.(string)); exists {
@@ -274,11 +273,11 @@ func schemaField(fields []schema.Field, name string) (*schema.Field, bool) {
 }
 
 func schemaFieldForValue(doc *document.Document, parent document.NodeID, entryIndex int, shape *schema.Node) (*schema.Field, bool) {
-	entries, ok := doc.MappingEntries(parent)
-	if !ok || entryIndex < 0 || entryIndex >= len(entries) {
+	entry, ok := doc.MappingEntryAt(parent, entryIndex)
+	if !ok {
 		return nil, false
 	}
-	kind, value, scalar := doc.Scalar(entries[entryIndex].Key)
+	kind, value, scalar := doc.Scalar(entry.Key)
 	if scalar && kind == document.ScalarString {
 		if field, exists := schemaField(shape.Object.Fields, value.(string)); exists {
 			return field, true
@@ -328,30 +327,12 @@ func deletionSafe(doc *document.Document, roots []document.NodeID) bool {
 		}
 	}
 
-	visited := make(map[document.NodeID]struct{})
-	var inspect func(document.NodeID) bool
-	inspect = func(id document.NodeID) bool {
-		if _, seen := visited[id]; seen {
-			return true
-		}
-		visited[id] = struct{}{}
-		_, ok := doc.Node(id)
-		if !ok {
-			return true
-		}
-		if target, reference := doc.ReferenceTarget(id); reference {
-			if _, removed := subtree[target]; removed {
-				if _, sourceRemoved := subtree[id]; !sourceRemoved {
-					return false
-				}
-			}
-		}
-		for _, child := range doc.Children(id) {
-			if !inspect(child) {
+	for target := range subtree {
+		for _, source := range doc.ReferenceSources(target) {
+			if _, removed := subtree[source]; !removed {
 				return false
 			}
 		}
-		return true
 	}
-	return inspect(doc.Root())
+	return true
 }

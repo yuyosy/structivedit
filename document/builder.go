@@ -39,7 +39,7 @@ func NewBuilderFrom(doc *Document) (*Builder, error) {
 	return &Builder{
 		draft: &documentDraft{
 			root:     doc.root,
-			nodes:    cloneNodeMap(doc.nodes),
+			nodes:    shareNodeMap(doc.nodes),
 			parents:  cloneParents(doc.parents),
 			refs:     cloneReferences(doc.refs),
 			nextID:   doc.nextID,
@@ -271,7 +271,9 @@ func (b *Builder) SetScalar(id NodeID, value any) error {
 	if equalScalar(entry.scalar, scalar) {
 		return nil
 	}
+	entry = cloneDocNode(entry)
 	entry.scalar = scalar
+	b.draft.nodes[id] = entry
 	return b.commitPrepared(b.draft.root, b.draft.nodes, b.draft.reserved, b.draft.nextID, b.draft.parents, b.draft.refs, true)
 }
 
@@ -301,7 +303,8 @@ func (b *Builder) SetSequenceItems(id NodeID, items []NodeID) error {
 	if err := b.checkSurvivingReferences(removed); err != nil {
 		return err
 	}
-	nodes := cloneNodeMap(b.draft.nodes)
+	nodes := shareNodeMap(b.draft.nodes)
+	nodes[id] = cloneDocNode(nodes[id])
 	nodes[id].sequence.items = append([]NodeID(nil), items...)
 	for nodeID := range removed {
 		delete(nodes, nodeID)
@@ -338,7 +341,8 @@ func (b *Builder) SetMappingEntries(id NodeID, entries []MappingEntry) error {
 	if err := b.checkSurvivingReferences(removed); err != nil {
 		return err
 	}
-	nodes := cloneNodeMap(b.draft.nodes)
+	nodes := shareNodeMap(b.draft.nodes)
+	nodes[id] = cloneDocNode(nodes[id])
 	nodes[id].mapping.entries = cloneMappingEntries(entries)
 	for nodeID := range removed {
 		delete(nodes, nodeID)
@@ -361,7 +365,9 @@ func (b *Builder) SetRestrictions(id NodeID, restrictions NodeRestrictions) erro
 	if entry.restrictions == restrictions {
 		return nil
 	}
+	entry = cloneDocNode(entry)
 	entry.restrictions = restrictions
+	b.draft.nodes[id] = entry
 	return b.commitPrepared(b.draft.root, b.draft.nodes, b.draft.reserved, b.draft.nextID, b.draft.parents, b.draft.refs, true)
 }
 
@@ -382,7 +388,7 @@ func (b *Builder) RestoreContentFrom(doc *Document) error {
 		return nil
 	}
 	changed := !sameContent
-	nodes := cloneNodeMap(doc.nodes)
+	nodes := shareNodeMap(doc.nodes)
 	if err := b.commitPrepared(doc.root, nodes, make(map[NodeID]struct{}), next, parents, refs, changed); err != nil {
 		return err
 	}
@@ -408,7 +414,7 @@ func (b *Builder) Build() (*Document, error) {
 	}
 	doc := &Document{
 		root:     b.draft.root,
-		nodes:    cloneNodeMap(b.draft.nodes),
+		nodes:    shareNodeMap(b.draft.nodes),
 		parents:  cloneParents(parents),
 		refs:     cloneReferences(refs),
 		nextID:   b.draft.nextID,
@@ -772,10 +778,12 @@ func validateAllocator(nodes map[NodeID]*docNode, reserved map[NodeID]struct{}, 
 	return nil
 }
 
-func cloneNodeMap(nodes map[NodeID]*docNode) map[NodeID]*docNode {
+// shareNodeMap copies the index while sharing immutable nodes. Every Builder
+// mutation replaces the affected node before modifying it.
+func shareNodeMap(nodes map[NodeID]*docNode) map[NodeID]*docNode {
 	cloned := make(map[NodeID]*docNode, len(nodes))
 	for id, node := range nodes {
-		cloned[id] = cloneDocNode(node)
+		cloned[id] = node
 	}
 	return cloned
 }

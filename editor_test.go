@@ -1,10 +1,31 @@
 package structivedit
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/yuyosy/structivedit/document"
+	"github.com/yuyosy/structivedit/schema"
 )
+
+func BenchmarkEditorViewsWithSchemaAndDelete(b *testing.B) {
+	for _, count := range []int{512, 2048, 4096} {
+		b.Run(fmt.Sprint(count), func(b *testing.B) {
+			doc := makeBenchmarkDocument(b, count)
+			item := schema.Node{Kind: schema.IntegerKind}
+			shape := schema.Node{Kind: schema.ArrayKind, Array: schema.ArraySchema{Item: &item}}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				editor, err := New(doc, WithSchema(shape), WithPolicy(Policy{Default: ScopePolicy{Deletable: Allow, Reorderable: Allow}}))
+				if err != nil {
+					b.Fatal(err)
+				}
+				editor.Views()
+			}
+		})
+	}
+}
 
 func TestNewRejectsZeroValueDocument(t *testing.T) {
 	if _, err := New(&document.Document{}); err != document.ErrInvalidDocument {

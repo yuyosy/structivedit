@@ -1,6 +1,9 @@
 package document
 
-import "sync/atomic"
+import (
+	"sort"
+	"sync/atomic"
+)
 
 // Document is an immutable snapshot of a single-root ownership tree and its
 // reference graph. Its fields are private so callers cannot mutate a snapshot.
@@ -127,4 +130,51 @@ func (d *Document) MappingEntries(id NodeID) ([]MappingEntry, bool) {
 		return nil, false
 	}
 	return node.MappingEntries(), true
+}
+
+// SequenceLen returns the number of items without copying the sequence.
+func (d *Document) SequenceLen(id NodeID) (int, bool) {
+	if d == nil {
+		return 0, false
+	}
+	node := d.nodes[id]
+	if node == nil || node.kind != NodeSequence {
+		return 0, false
+	}
+	return len(node.sequence.items), true
+}
+
+// SequenceItem returns one item without copying the sequence.
+func (d *Document) SequenceItem(id NodeID, index int) (NodeID, bool) {
+	count, ok := d.SequenceLen(id)
+	if !ok || index < 0 || index >= count {
+		return 0, false
+	}
+	return d.nodes[id].sequence.items[index], true
+}
+
+// MappingEntryAt returns one entry without copying the mapping.
+func (d *Document) MappingEntryAt(id NodeID, index int) (MappingEntry, bool) {
+	if d == nil || index < 0 {
+		return MappingEntry{}, false
+	}
+	node := d.nodes[id]
+	if node == nil || node.kind != NodeMapping || index >= len(node.mapping.entries) {
+		return MappingEntry{}, false
+	}
+	entry := node.mapping.entries[index]
+	return MappingEntry{Key: entry.key, Value: entry.value}, true
+}
+
+// ReferenceSources returns reference nodes pointing at target, ordered by ID.
+func (d *Document) ReferenceSources(target NodeID) []NodeID {
+	if d == nil {
+		return nil
+	}
+	sources := make([]NodeID, 0, len(d.refs[target]))
+	for source := range d.refs[target] {
+		sources = append(sources, source)
+	}
+	sort.Slice(sources, func(i, j int) bool { return sources[i] < sources[j] })
+	return sources
 }

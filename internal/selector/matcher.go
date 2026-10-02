@@ -73,21 +73,20 @@ func MatchesNode(doc *document.Document, pattern Pattern, id document.NodeID) bo
 	for _, segment := range segments {
 		switch typed := segment.(type) {
 		case document.SequenceIndexSegment:
-			items, ok := doc.SequenceItems(current)
-			if !ok || typed.Index() < 0 || typed.Index() >= len(items) {
+			item, ok := doc.SequenceItem(current, typed.Index())
+			if !ok {
 				return false
 			}
 			concrete = append(concrete, concreteSegment{kind: concreteIndex, index: typed.Index()})
-			current = items[typed.Index()]
+			current = item
 		case document.MappingEntrySegment:
 			if typed.Role() != document.MappingValueRole {
 				return false
 			}
-			entries, ok := doc.MappingEntries(current)
-			if !ok || typed.EntryIndex() < 0 || typed.EntryIndex() >= len(entries) {
+			entry, ok := doc.MappingEntryAt(current, typed.EntryIndex())
+			if !ok {
 				return false
 			}
-			entry := entries[typed.EntryIndex()]
 			concrete = append(concrete, mappingKeyStep(doc, entry.Key))
 			current = entry.Value
 		default:

@@ -91,3 +91,69 @@ func BenchmarkBuilderReserveAndDefine(b *testing.B) {
 		}
 	}
 }
+
+func TestSharedSnapshotsRemainImmutableAcrossBuilderMutations(t *testing.T) {
+	b := NewBuilder()
+	key, _ := b.NewScalar("key")
+	value, _ := b.NewScalar("old")
+	mapping, _ := b.NewMapping([]MappingEntry{{Key: key, Value: value}})
+	other, _ := b.NewScalar("other")
+	root, _ := b.NewSequence([]NodeID{mapping, other})
+	if err := b.SetRoot(root); err != nil {
+		t.Fatal(err)
+	}
+	first, err := b.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.SetScalar(value, "new"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.SetRestrictions(mapping, RestrictionReadOnly); err != nil {
+		t.Fatal(err)
+	}
+	second, err := b.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.nodes[other] != second.nodes[other] {
+		t.Fatal("unchanged node was copied")
+	}
+	if err := b.SetMappingEntries(mapping, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.SetSequenceItems(root, []NodeID{other, mapping}); err != nil {
+		t.Fatal(err)
+	}
+	third, err := b.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, v, _ := first.Scalar(value); v != "old" {
+		t.Fatalf("first scalar: %v", v)
+	}
+	if _, v, _ := second.Scalar(value); v != "new" {
+		t.Fatalf("second scalar: %v", v)
+	}
+	if n, _ := first.Node(mapping); n.Restrictions() != 0 {
+		t.Fatal("first restrictions changed")
+	}
+	if entries, _ := second.MappingEntries(mapping); len(entries) != 1 {
+		t.Fatal("second mapping changed")
+	}
+	if id, _ := second.SequenceItem(root, 0); id != mapping {
+		t.Fatal("second sequence changed")
+	}
+	if _, ok := third.Node(value); ok {
+		t.Fatal("removed node retained")
+	}
+	if err := b.RestoreContentFrom(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.SetScalar(value, "restored edit"); err != nil {
+		t.Fatal(err)
+	}
+	if _, v, _ := first.Scalar(value); v != "old" {
+		t.Fatal("restore mutated first snapshot")
+	}
+}
