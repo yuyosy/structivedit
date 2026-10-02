@@ -157,3 +157,39 @@ func TestSharedSnapshotsRemainImmutableAcrossBuilderMutations(t *testing.T) {
 		t.Fatal("restore mutated first snapshot")
 	}
 }
+
+func TestSnapshotReadsWhileBuilderChanges(t *testing.T) {
+	b := NewBuilder()
+	root, _ := b.NewScalar("saved")
+	b.SetRoot(root)
+	snapshot, err := b.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft, err := NewBuilderFrom(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan bool, 1)
+	go func() {
+		for range 1000 {
+			_, value, ok := snapshot.Scalar(root)
+			if !ok || value != "saved" {
+				done <- false
+				return
+			}
+		}
+		done <- true
+	}()
+	for range 1000 {
+		if err := draft.SetScalar(root, "changed"); err != nil {
+			t.Fatal(err)
+		}
+		if err := draft.SetScalar(root, "again"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !<-done {
+		t.Fatal("snapshot changed during builder edits")
+	}
+}

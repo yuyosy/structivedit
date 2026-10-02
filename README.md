@@ -90,6 +90,14 @@ background file watcher or file lock: changes are checked when saving, and a
 separate process can still write between the check and the save. When leaving
 with unsaved edits, the CLI asks whether to discard them or continue editing.
 
+The CLI writes a temporary file in the destination directory, flushes and closes
+it, then replaces the destination. A write or preparation failure leaves the
+original file intact. Existing symlinks are retained and their targets are
+updated. File mode bits are preserved; on Windows the existing file's ACL is
+also retained. Atomic replacement changes the file identity, so other hard
+links keep their previous contents. This does not provide a file lock or a
+transaction with external writers.
+
 ## Embed the editor
 
 The embedding application owns file I/O and decides when a save succeeds. A
@@ -97,7 +105,7 @@ typical integration decodes a document, creates an Editor, attaches a save
 handler, then runs the Bubble Tea program:
 
 ```go
-func edit(path string) error {
+func edit(path string, persist func(string, []byte) error) error {
 	file, err := os.Open(path)
 	if err != nil {
 		return err
@@ -127,7 +135,7 @@ func edit(path string) error {
 		if err := session.Encode(&output, editor.Document()); err != nil {
 			return err
 		}
-		if err := os.WriteFile(path, output.Bytes(), 0o600); err != nil {
+		if err := persist(path, output.Bytes()); err != nil {
 			return err
 		}
 		editor.MarkClean()
@@ -157,6 +165,7 @@ import (
 | Option | Default / behavior |
 |---|---|
 | `WithAliasExpansion(true)` | Disabled by default; show alias targets as read-only rows |
+| `WithAliasRowLimit(n)` | At most 10,000 projected rows by default; nonpositive values hide projections |
 | `WithInlineEditing(true)` | Disabled by default; edit scalar values in their rows |
 | `WithColors(false)` | Enabled by default; `NO_COLOR` disables colors |
 | `WithMouseDoubleClick(false)` | Enabled by default for editable scalars and booleans |
@@ -166,6 +175,13 @@ caller is responsible for the dirty-exit decision and for selecting file
 permissions and other persistence behavior. `Editor.Apply` accepts typed
 operations such as `SetValue`, `Toggle`, `Move`, `Add`, `Delete`, `Focus`,
 `Undo`, and `Redo`.
+
+Supply a persistence callback that prepares and flushes a temporary file before
+replacing the destination, as the reference CLI does. The application chooses
+file permissions and conflict handling. Input controls and bidirectional
+formatting controls are escaped in the terminal view; the stored values remain
+unchanged. Display widths, clipping, cursor movement, and deletion account for
+wide characters and grapheme clusters.
 
 ### External change handling
 
@@ -246,6 +262,12 @@ redo. Output is UTF-8 with LF line endings, two-space indentation, and a final
 newline. Byte-for-byte source reproduction is not promised; unrepresentable
 nodes or tag payloads return errors rather than being silently discarded.
 
+Moves that place an alias before its anchor are rejected without changing the
+document or history. Mapping keys cannot be edited, but optional entries can
+be deleted when schema and policy permit it. Custom tags and merge entries
+retain their stronger read-only restrictions. NaN values remain supported;
+schemas with a numeric minimum or maximum report NaN as a validation error.
+
 For untrusted input, use `yamlcodec.DecodeWithOptions` to limit input bytes,
 node count, or nesting depth. A zero limit is unlimited. `yamlcodec.Decode`
 keeps unlimited behavior for compatibility.
@@ -275,7 +297,9 @@ Run all package tests:
 go test ./...
 ```
 
-GitHub Actions tests and builds with Go 1.27 and the current stable Go release.
+GitHub Actions tests, vets, and builds on Linux and Windows with Go 1.27 and the
+current stable Go release. A Linux job additionally runs race detection, bounded
+YAML and selector fuzzing, and govulncheck for reachable known vulnerabilities.
 
 
 ## License
