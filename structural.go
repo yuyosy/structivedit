@@ -187,6 +187,9 @@ func (e *Editor) applyMove(id document.NodeID, finalIndex int) (ApplyResult, err
 	if err != nil {
 		return ApplyResult{}, err
 	}
+	if !updated.OrderedReferencesValid() {
+		return ApplyResult{}, ErrNotReorderable
+	}
 	updatedIssues := publicIssues(resolver.ValidateSchema(updated, e.schema))
 	previousIssues := e.issues
 	effect := operation.Effect{Kind: operation.EffectNodeMoved, NodeID: id, ParentID: parent.Parent, FromIndex: parent.Index, ToIndex: finalIndex}

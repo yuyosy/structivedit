@@ -71,6 +71,12 @@ type NodeRestrictions uint8
 
 const (
 	RestrictionReadOnly NodeRestrictions = 1 << iota
+	// RestrictionKeyReadOnly prevents editing inside a mapping key, while
+	// permitting deletion of the containing entry.
+	RestrictionKeyReadOnly
+	// RestrictionReferenceOrder requires a reference's target to precede it
+	// in ownership preorder, as required by formats such as YAML.
+	RestrictionReferenceOrder
 )
 
 // ID returns this node's stable identity within its Document.

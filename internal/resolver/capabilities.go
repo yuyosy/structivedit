@@ -22,7 +22,7 @@ func ResolveCapabilities(doc *document.Document, id document.NodeID, compiledSch
 	result := ResolvedPolicy{}
 	parent, hasParent := doc.Parent(id)
 	isMappingKey := hasParent && parent.Role == document.ParentMappingKey
-	isReadOnly := node.Restrictions()&document.RestrictionReadOnly != 0
+	isReadOnly := node.Restrictions()&(document.RestrictionReadOnly|document.RestrictionKeyReadOnly) != 0
 	isReference := node.Kind() == document.NodeReference
 	if node.Kind() == document.NodeScalar && !isMappingKey && !isReadOnly && !isReference && permissions.Editable {
 		result.Editable = true

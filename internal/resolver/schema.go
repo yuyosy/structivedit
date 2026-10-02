@@ -375,6 +375,9 @@ func validateScalar(doc *document.Document, rules schema.ScalarSchema, id docume
 	}
 	if kind == document.ScalarFloat {
 		floating := value.(float64)
+		if math.IsNaN(floating) && (rules.Min != nil || rules.Max != nil) {
+			addIssue(issues, id, path, "schema.nan", "NaN does not satisfy a numeric range", schema.SeverityError)
+		}
 		if minimum, ok := rules.Min.(float64); ok && floating < minimum {
 			addIssue(issues, id, path, "schema.min", fmt.Sprintf("must be at least %g", minimum), schema.SeverityError)
 		}

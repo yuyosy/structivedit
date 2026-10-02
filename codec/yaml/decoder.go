@@ -258,7 +258,7 @@ func (state *decodeState) defineTree(node *yamlv3.Node) error {
 				return err
 			}
 			entries[index] = document.MappingEntry{Key: state.nodeIDs[keyNode], Value: state.nodeIDs[valueNode]}
-			state.markReadOnly(state.nodeIDs[keyNode])
+			state.restrictions[state.nodeIDs[keyNode]] |= document.RestrictionKeyReadOnly
 			if isMergeKey(keyNode) {
 				state.markReadOnly(state.nodeIDs[valueNode])
 			}
@@ -278,6 +278,7 @@ func (state *decodeState) defineTree(node *yamlv3.Node) error {
 			return err
 		}
 		state.markReadOnly(id)
+		state.restrictions[id] |= document.RestrictionReferenceOrder
 	default:
 		return ErrInvalidYAML
 	}

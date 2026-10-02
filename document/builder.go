@@ -355,7 +355,7 @@ func (b *Builder) SetRestrictions(id NodeID, restrictions NodeRestrictions) erro
 	if entry == nil {
 		return ErrNodeNotFound
 	}
-	if restrictions & ^RestrictionReadOnly != 0 {
+	if restrictions & ^(RestrictionReadOnly|RestrictionKeyReadOnly|RestrictionReferenceOrder) != 0 {
 		return ErrInvalidDocument
 	}
 	if entry.restrictions == restrictions {
@@ -667,7 +667,7 @@ func rebuildIndexes(root NodeID, nodes map[NodeID]*docNode, reserved map[NodeID]
 		return nil
 	}
 	for id, node := range nodes {
-		if id == 0 || node == nil || node.id != id || node.restrictions & ^RestrictionReadOnly != 0 {
+		if id == 0 || node == nil || node.id != id || node.restrictions & ^(RestrictionReadOnly|RestrictionKeyReadOnly|RestrictionReferenceOrder) != 0 {
 			return nil, nil, ErrInvalidDocument
 		}
 		switch node.kind {

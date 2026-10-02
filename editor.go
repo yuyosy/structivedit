@@ -363,7 +363,7 @@ func (e *Editor) applySetValue(id document.NodeID, value any) (ApplyResult, erro
 	if parent, hasParent := e.doc.Parent(id); hasParent && parent.Role == document.ParentMappingKey {
 		return ApplyResult{}, ErrNotEditable
 	}
-	if node.Restrictions()&document.RestrictionReadOnly != 0 {
+	if node.Restrictions()&(document.RestrictionReadOnly|document.RestrictionKeyReadOnly) != 0 {
 		return ApplyResult{}, ErrNotEditable
 	}
 	currentKind, currentValue, scalar := node.Scalar()
